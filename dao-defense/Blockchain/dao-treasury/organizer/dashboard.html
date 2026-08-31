@@ -33,16 +33,18 @@
 
 <script>
 const VERIFIER = "http://127.0.0.1:9090";
+const TOKEN = ""; // set to the verifier's ADMIN_TOKEN in production
 const VULNS = ["oracle", "gauge", "batch", "ghost", "sandwich"];
 const PROXIES = ["treasury", "governor", "lending", "legacyGauge", "mirror"];
 
 const short = (a) => a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—";
+const auth = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
 
 async function load() {
   let teams, status;
   try {
-    teams = await fetch(`${VERIFIER}/teams`).then(r => r.json());
-    status = await fetch(`${VERIFIER}/status`).then(r => r.json()).catch(() => ({}));
+    teams = await fetch(`${VERIFIER}/teams${auth}`).then(r => r.json());
+    status = await fetch(`${VERIFIER}/status${auth}`).then(r => r.json()).catch(() => ({}));
   } catch (e) {
     document.getElementById("rows").innerHTML = `<tr><td class="err" colspan="4">verifier unreachable at ${VERIFIER}</td></tr>`;
     return;

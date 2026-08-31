@@ -38,30 +38,41 @@ node register.js team01 http://<team-host>:8081 "flag{round-1}"
 
 ## Endpoints
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | `ok` |
-| `GET /teams` | registry (rpc/chainId/contracts — no flags) |
-| `GET /claim-challenge?team=&player=&kind=&proof=` | EIP-712 challenge (bound to the flag epoch, 300s expiry) |
-| `POST /claim` | verify signature + expiry + on-chain exploit state, release the flag |
-| `GET /status` | exploited vulns per team (for the organizer dashboard) |
+| Endpoint | Access | Description |
+|----------|--------|-------------|
+| `GET /health` | public | `ok` |
+| `GET /claim-challenge?team=&player=&kind=&proof=` | public | EIP-712 challenge (bound to flag epoch, 300s expiry) |
+| `POST /claim` | public | verify signature + expiry + on-chain exploit state, release the flag |
+| `GET /teams` | organizer | registry (rpc/chainId/contracts — no flags) |
+| `GET /status` | organizer | exploited vulns per team (for the dashboard) |
+
+The organizer-only endpoints are gated by `ADMIN_TOKEN` (bearer header or
+`?token=`). When `ADMIN_TOKEN` is unset (local dev), they are open.
 
 ## Flag rotation
 
 `flags.json` is the per-round flag source of truth. The organizer (or a GZCTF
-flag-lifecycle hook) updates it each round — the verifier binds each claim to
-the current `flagEpoch` (a hash of the flag), so stale claims are rejected.
-Automating this from GZCTF's round/flag feed is the remaining integration step.
+flag-lifecycle hook) rewrites it in place each round — the verifier **re-reads
+it on every claim** (no restart needed), and each claim is scoped to the
+`flagEpoch` (hash of the flag) it was issued under:
+
+- A new round's flag automatically re-arms the same `player+kind`.
+- A claim issued under a previous flag is rejected with `flag rotated`.
+
+> **Remaining integration:** the *source* of `flags.json` must be GZCTF's
+> round/flag feed so both the target's `/flag` and the verifier agree on the
+> current team flag. Until that hook is wired, the organizer updates
+> `flags.json` (or re-runs `register.js`) each round.
 
 ## Run
 
 ```sh
 npm ci
-npm start            # listens on 9090
+ADMIN_TOKEN=secret npm start            # listens on 9090
 ```
 
 Or via Docker (the organizer stack):
 
 ```sh
-docker compose up -d --build   # from the repo root (see docker-compose.yml)
+ADMIN_TOKEN=secret docker compose up -d --build   # from the repo root
 ```

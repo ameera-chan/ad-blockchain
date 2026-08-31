@@ -57,6 +57,29 @@ ABIs — it never trusts a team's `/info` or `/artifact`.
 | `dist/` | The defender package given to teams |
 | `organizer/` | Private organizer dashboard |
 
+## What ships to participants vs. stays organizer-private
+
+The public/participant-facing release contains only what defenders need:
+
+```
+challenge.yml
+src/            (the challenge service + contracts)
+checker/        (may stay private too; it is the SLA oracle)
+dist/           (defender kit)
+```
+
+The following must **never** be distributed to participants — they are
+organizer infrastructure or give away the answers:
+
+- `solver/` — the working exploit for all five vulnerabilities. Shipping this
+  is equivalent to handing out the flag.
+- `verifier/` — the scoring authority (pinned ABIs + registry + flag logic).
+- `organizer/` — the private status dashboard.
+
+For a real event, host `solver/`, `verifier/`, and `organizer/` in a separate
+**private** repository (or exclude them from the public export). The public
+repo should carry only `challenge.yml`, `src/`, `checker/`, and `dist/`.
+
 ## How to run locally
 
 ```sh

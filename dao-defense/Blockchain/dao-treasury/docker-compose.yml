@@ -7,6 +7,11 @@ services:
       - "9090:9090"
     volumes:
       - ./verifier/teams.json:/app/teams.json:ro
+      - ./verifier/flags.json:/app/flags.json:ro
     environment:
       - PORT=9090
+      - TEAMS_FILE=/app/teams.json
+      - FLAGS_FILE=/app/flags.json
+      # Organizer-only endpoints (/teams, /status) are gated by this token.
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
     restart: unless-stopped

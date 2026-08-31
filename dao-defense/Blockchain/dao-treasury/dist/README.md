@@ -34,12 +34,20 @@ forge build
 | Your upgrade key | team private key (authorizes the proxy admin) |
 | Your player key | any self-generated key (funded via `POST /faucet`) |
 
-> **Where your upgrade key comes from:** the team service generates it on first
-> boot and persists it to `/data/secrets/upgrade-key` (a mounted volume), so it
-> survives restarts. Read it with `daoctl credentials` (in `tools/`). If the
-> organizer provisioned `GZCTF_UPGRADE_KEY`, that overrides the persisted key.
+> **Where your upgrade key comes from (hosted event, `selfHosted: false`):** the
+> organizer generates a unique key per team, injects it into your hosted
+> container as `GZCTF_UPGRADE_KEY`, and privately delivers the **same key** to
+> you (via GZCTF's per-team config or a secure handout). Use it locally with:
+>
+> ```sh
+> export UPGRADE_KEY=0x…
+> ./tools/daoctl upgrade <proxy> src/patchable/<Contract>.sol:<Contract>
+> ```
+>
 > This key — **not** your player key — owns the proxy admin, so it is the only
-> credential that can repoint a proxy.
+> credential that can repoint a proxy. (For local self-hosted development the
+> service instead generates the key on first boot under
+> `/data/secrets/upgrade-key`.)
 
 ## Defense workflow
 
