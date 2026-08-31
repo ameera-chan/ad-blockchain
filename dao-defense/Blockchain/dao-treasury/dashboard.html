@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAO Treasury — A&amp;D status</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 24px;
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #0d1117; color: #e6edf3;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #8b949e; margin-bottom: 20px; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
+  th { color: #8b949e; font-weight: 500; white-space: nowrap; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .addr { color: #79c0ff; }
+  .proxies code { display: block; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; margin: 1px 3px 1px 0; }
+  .hit { background: #1f6feb22; color: #3fb950; border: 1px solid #23863666; }
+  .miss { background: #1f6feb11; color: #484f58; border: 1px solid #21262d; }
+  .err { color: #f85149; }
+</style>
+</head>
+<body>
+  <h1>DAO Treasury Defense — team status</h1>
+  <div class="sub">proxy addresses · RPC endpoints · live exploit status (auto-refresh 5s)</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Team</th>
+        <th>RPC</th>
+        <th>Proxies</th>
+        <th>Exploited</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+<script>
+// ---- EDIT THIS -----------------------------------------------------------
+const TEAMS = [
+  { name: "team01", url: "http://62.238.114.75:8081" },
+  { name: "team02", url: "http://62.238.114.75:8082" },
+  { name: "team03", url: "http://62.238.114.75:8083" },
+];
+const VULNS = ["oracle", "gauge", "batch", "ghost", "sandwich"];
+const PROXIES = ["treasury", "governor", "lending", "legacyGauge", "mirror"];
+// --------------------------------------------------------------------------
+
+const short = (a) => a && a.length >= 10 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+
+async function load() {
+  const rows = await Promise.all(TEAMS.map(async (t) => {
+    try {
+      const [info, status] = await Promise.all([
+        fetch(t.url + "/info").then((r) => r.json()),
+        fetch(t.url + "/status").then((r) => r.json()),
+      ]);
+      return { ...t, info, status };
+    } catch (e) {
+      return { ...t, error: e.message };
+    }
+  }));
+  render(rows);
+}
+
+function render(rows) {
+  document.getElementById("rows").innerHTML = rows.map((r) => {
+    if (r.error) {
+      return `<tr><td>${r.name}</td><td colspan="3" class="err">unreachable — ${r.error}</td></tr>`;
+    }
+    const proxies = PROXIES.map((p) =>
+      `<code title="${r.info.contracts[p]}">${p}: <span class="addr">${short(r.info.contracts[p])}</span></code>`
+    ).join("");
+    const badges = VULNS.map((v) =>
+      `<span class="badge ${r.status.exploited[v] ? "hit" : "miss"}">${r.status.exploited[v] ? "✓" : "✗"} ${v}</span>`
+    ).join("");
+    return `<tr>
+      <td><strong>${r.name}</strong></td>
+      <td><code>${r.url}/rpc</code></td>
+      <td class="proxies">${proxies}</td>
+      <td>${badges}</td>
+    </tr>`;
+  }).join("");
+}
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

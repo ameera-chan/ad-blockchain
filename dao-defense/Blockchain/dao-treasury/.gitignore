@@ -1,0 +1,21 @@
+# Node / npm
+src/node_modules/
+dist/node_modules/
+solver/node_modules/
+npm-debug.log
+
+# Python checker
+checker/__pycache__/
+*.pyc
+
+# Generated at runtime — never commit team credentials, keys or deployments
+src/runtime/
+
+# Foundry build artifacts
+dist/out/
+dist/cache/
+dist/broadcast/
+solver/out/
+solver/cache/
+solver/broadcast/
+solver/probe.txt
