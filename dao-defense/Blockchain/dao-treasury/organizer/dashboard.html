@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAO Treasury — organizer status</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0e14; color: #d7dce4; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  p.sub { color: #7a8494; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1c222e; vertical-align: top; }
+  th { color: #8b96a7; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .addr { color: #6fb1ff; }
+  .rpc { color: #7bd88f; }
+  .badge { display: inline-block; margin: 1px 3px 1px 0; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+  .exploited { background: #14341c; color: #5fe08a; }
+  .open { background: #2a1f1f; color: #b86a6a; }
+  .err { color: #e06c75; }
+</style>
+</head>
+<body>
+<h1>DAO Treasury Defense — organizer status</h1>
+<p class="sub">Private organizer view. Reads each team's /info and the organizer verifier's /status.</p>
+<table>
+  <thead><tr>
+    <th>Team</th><th>RPC</th><th>Proxies</th><th>Exploited</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+const TEAMS = [
+  { name: "team01", url: "http://62.238.114.75:8081" },
+  { name: "team02", url: "http://62.238.114.75:8082" },
+  { name: "team03", url: "http://62.238.114.75:8083" },
+];
+const VERIFIER = "http://127.0.0.1:9090";
+const VULNS = ["oracle", "gauge", "batch", "ghost", "sandwich"];
+const PROXIES = ["treasury", "governor", "lending", "legacyGauge", "mirror"];
+
+const short = (a) => a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—";
+
+async function load() {
+  const status = await fetch(`${VERIFIER}/status`).then(r => r.json()).catch(() => ({}));
+  const rows = await Promise.all(TEAMS.map(async (t) => {
+    try {
+      const info = await fetch(`${t.url}/info`).then(r => r.json());
+      const c = info.contracts || {};
+      const proxies = PROXIES.map((k) => c[k] ? `<span class="addr" title="${c[k]}">${short(c[k])}</span>` : "—").join(" ");
+      const exploited = (status[t.name] || {});
+      const badges = VULNS.map((v) =>
+        `<span class="badge ${exploited[v] ? "exploited" : "open"}">${exploited[v] ? "✓" : "✗"} ${v}</span>`
+      ).join("");
+      return `<tr><td>${t.name}</td><td><span class="rpc">${t.url}/rpc</span></td><td>${proxies}</td><td>${badges}</td></tr>`;
+    } catch (e) {
+      return `<tr><td>${t.name}</td><td class="err">unreachable</td><td>—</td><td>—</td></tr>`;
+    }
+  }));
+  document.getElementById("rows").innerHTML = rows.join("");
+}
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

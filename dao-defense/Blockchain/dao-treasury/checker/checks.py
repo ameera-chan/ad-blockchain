@@ -1,5 +1,3 @@
-import secrets
-
 from eth_abi import encode
 from eth_account import Account
 from eth_utils import keccak, to_checksum_address
@@ -169,20 +167,8 @@ def info_and_rpc(target):
 
 
 @check
-def artifacts_and_claim_schema(target):
-    player = "0x" + secrets.token_hex(20)
-    data = info(target)
+def artifacts(target):
     artifact = target.request("GET", "/artifact/Token")
     artifact_data = body(artifact)
     if artifact.status_code != 200 or not artifact_data.get("abi") or not artifact_data.get("bytecode", "").startswith("0x"):
         raise Mumble("contract artifact endpoint is broken")
-    challenge = target.request(
-        "GET",
-        "/claim-challenge",
-        params={"player": player, "kind": "oracle", "proof": "0x" + "00" * 20},
-    )
-    claim = body(challenge)
-    if challenge.status_code != 200 or not {"domain", "types", "value"}.issubset(claim):
-        raise Mumble("EIP-712 claim challenge is incomplete")
-    if claim["domain"].get("chainId") != data["chainId"]:
-        raise Mumble("claim domain is not bound to the team chain")

@@ -1,74 +1,121 @@
 # DAO Treasury Defense
 
-## What
+A GZCTF **Attack–Defense** blockchain challenge. Each team gets a self-hosted,
+persistent Anvil chain running a DAO treasury (governance, lending, rewards,
+AMM). The default build intentionally contains **five vulnerabilities**.
+Defenders patch the `patchable/` contracts behind proxies; attackers exploit
+the vulnerable state on opponents' chains to steal their round flag.
 
-This is a GZCTF Attack–Defense blockchain challenge. A session creates a fresh
-Ganache chain containing isolated DAO, lending, reward, and AMM assets. The
-default build intentionally contains five vulnerabilities. Defenders repair
-the source while the checker protects legitimate behavior.
+## Architecture
 
-## Where
+```
+GZCTF
+  │
+  ▼
+Team service :8080            (one container per team, self-hosted)
+  │
+  ├── /health  /info  /status  /faucet  /rpc  /claim-challenge  /claim
+  │
+  ▼
+Internal Anvil                (spawned by deploy.js as a child of the gateway)
+  │
+  ▼
+Team blockchain
+  ├── Proxies   → patchable implementations (V1 … Vn)
+  └── Supporting contracts (tokens, oracle, AMM, staking, timelock)
+```
 
-- `challenge.yml` defines the platform challenge.
-- `src/` contains the service and contracts.
-- `checker/` contains functionality-only SLA checks.
-- `solver/` contains the official local solver: `solve.js` plus `lib/` (HTTP
-  client, EIP-712 claims, raw-transaction plumbing) and one module per
-  vulnerability under `solver/vulnerabilities/`. See `solver/README.md`.
+The gateway exposes only the public surface; Anvil's `8545` is never the
+competition endpoint. The RPC proxy allows a fixed allowlist (read methods +
+`eth_sendRawTransaction`) and blocks Anvil admin methods (`evm_*`, `anvil_*`).
 
-## How to run
+## Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `challenge.yml` | GZCTF definition (`type: AttackDefense`) |
+| `src/` | The running team service (built from `src/Dockerfile`) |
+| `src/contracts/patchable/` | Contracts defenders modify, deployed behind proxies |
+| `src/contracts/supporting/` | Infrastructure (tokens, oracle, AMM, staking) |
+| `src/contracts/interfaces/` | Shared interfaces |
+| `src/gateway/server.js` | The public HTTP surface (`/rpc`, `/info`, …) |
+| `src/scripts/deploy.js` | Anvil lifecycle + proxy deployment |
+| `checker/` | Organizer SLA checker (functionality-only) |
+| `solver/` | Organizer reference exploit (Foundry scripts) |
+| `dist/` | The defender package given to teams |
+
+## How to run locally
 
 ```sh
 cd src
 npm ci
 npm test
-npm start
+npm start            # or: GZCTF_FLAG=flag{local} node gateway/server.js
 ```
 
-The service listens on port `8080` by default. Create a session with:
+The service listens on `8080`. Use `/rpc` as the RPC endpoint, `/info` for the
+proxy addresses, and `/faucet` to fund an attacker address with gas + tokens.
 
-```text
-POST /session
-{"player":"0x..."}
+## Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | `ok` |
+| `GET /info` | `chainId`, `rpcUrl`, proxy `contracts` map, `victim`, `vulnerabilities`, `upgradeAddress` |
+| `GET /status` | which of the five vulns have been exploited (claimed) |
+| `GET /artifact/:name` | compiled artifact ABI/bytecode |
+| `POST /faucet` | fund `{player}` once per flag epoch |
+| `POST /rpc` | proxied JSON-RPC to the internal Anvil (allowlisted) |
+| `GET /claim-challenge` | EIP-712 challenge for a `(player, kind, proof)` |
+| `POST /claim` | verify exploit state, mint the flag |
+
+## Vulnerabilities
+
+1. **oracle** — `LendingVault` mixes collateral/debt epochs (`LendingVault.sol`).
+2. **gauge** — `LegacyGauge.claim` reads live balance instead of the frozen
+   migrated balance (`LegacyGauge.sol`).
+3. **batch** — `RiskGovernor.proposeBatch` classifies per-action instead of
+   aggregate, bypassing the critical threshold (`RiskGovernor.sol`).
+4. **ghost** — `VoteMirror.sync` swallows a failed observer callback and
+   `withdraw` ignores the return (`VoteMirror.sol`, `GovStakingVault.sol`).
+5. **sandwich** — `Treasury.rebalance` quotes the spot price and only guards 5%
+   slippage (`Treasury.sol`).
+
+## Defense workflow
+
+Defenders patch `src/contracts/patchable/*.sol`, deploy the new implementation,
+and repoint the proxy with their team upgrade key. The bundled `dist/tools/daoctl.sh`
+CLI wraps this:
+
+```sh
+./daoctl info                       # the team's /info
+./daoctl credentials                # upgrade key + address (from the mounted volume / env)
+./daoctl upgrade <proxy> <contract> # deploy V2 + upgradeTo
 ```
 
-Use the returned `/rpc/<session-id>` endpoint. Only read methods and
-`eth_sendRawTransaction` are allowed. Sessions expire after five minutes.
+Or do it manually:
 
-## Claim signing
+```
+forge create src/patchable/LendingVault.sol:LendingVault --rpc-url $RPC --private-key $UPGRADE_KEY --broadcast
+cast send <proxy> "upgradeTo(address)" <newImpl> --rpc-url $RPC --private-key $UPGRADE_KEY
+```
 
-Claims use EIP-712. `GET /claim-challenge/<id>` requires `player`, `kind`, and
-`proof` query parameters and returns the exact `domain`, `types`, and `value`
-to sign. The payload binds the session, player, vulnerability, proof, nonce,
-chain ID, expiry, verifier contract, and current flag epoch. Each vulnerability
-can be claimed once per session.
+The proxy address stays stable; only the implementation changes.
 
 ## Checker
 
-The checker follows the `owasp-portal` layout. It checks health, fresh session
-creation, chain identity, RPC restrictions, artifacts, the EIP-712 claim
-schema, EOA and contract delegation, observer-failure withdrawals, gauge
-migration claims, permissionless rebalancing, and the OpenZeppelin governance
-queue and execution flow. It does not read the flag.
-
-## Governance
-
-Governance uses OpenZeppelin `Governor`, `GovernorVotes`,
-`GovernorCountingSimple`, `GovernorSettings`, `GovernorTimelockControl`, and
-`TimelockController`. The timelock owns treasury distribution authority. The
-governor has the proposer role, execution is open, and the deployer renounces
-the timelock admin role after setup.
-
-## Tests
-
-`npm test` runs security checks, obvious-overpatch mutation tests, five
-single-repair compilation checks, full-repair functionality, vulnerable-build
-functionality, and deterministic post-fee AMM profitability validation.
+`checker/` is a functionality-only SLA harness (one-shot, `GZCTF_*` env vars,
+exit code `0 Ok / 1 Mumble / 2 Offline / 3 InternalError`). It verifies health,
+proxy code, token flows, staking, governance, and rebalancing — never whether a
+vulnerability still exists.
 
 ## Environment
 
-- `PORT`: HTTP port; default `8080`.
-- `SESSION_TTL_MS`: session lifetime; default `300000`.
-- `MAX_SESSIONS`: live session limit; default `24`.
-- `GZCTF_FLAG_FILE`: platform flag file; default `/flag`.
-- `GZCTF_FLAG`: local fallback flag.
+| Variable | Description |
+|----------|-------------|
+| `PORT` | HTTP port (default `8080`) |
+| `CHAIN_ID` | Anvil chain id |
+| `MNEMONIC` | optional deterministic deploy mnemonic |
+| `GZCTF_FLAG_FILE` / `GZCTF_FLAG` | round flag (file or env; team-side this is only the round-reset signal) |
+| `GZCTF_UPGRADE_KEY` | optional organizer-provisioned upgrade key override |
+| `UPGRADE_KEY_FILE` | persisted upgrade key path (default `/data/secrets/upgrade-key`) |

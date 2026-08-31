@@ -14,11 +14,12 @@ exploitation (attacking other teams) is your own solver over their RPC.
 | Your upgrade credential | team private key (authorizes the ProxyAdmin) |
 | Full ABI / bytecode | `GET /artifact/<Name>` |
 
-> **Where your upgrade key comes from:** in a hosted (GZCTF) deployment it is
-> injected as the `GZCTF_UPGRADE_KEY` environment variable and shown to you on
-> your private team panel. Self-hosting or running locally, the container logs
-> it at boot (`[upgrade] team upgrade key: 0x…`). This key — **not** your player
-> key — owns the ProxyAdmin, so it is the only credential that can repoint a
+> **Where your upgrade key comes from:** the team service generates it on first
+> boot and persists it to `/data/secrets/upgrade-key` (a mounted volume), so it
+> survives restarts. Read it with `daoctl credentials` (in `tools/`). If the
+> organizer provisioned `GZCTF_UPGRADE_KEY`, that overrides the persisted key.
+> This key — **not** your player key — owns the proxy admin, so it is the only
+> credential that can repoint a
 > proxy.
 
 ## Layout

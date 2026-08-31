@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const express = require("express");
 const { ethers } = require("ethers");
 const { compileContracts } = require("../lib/compiler");
@@ -9,11 +10,32 @@ const PORT = Number(process.env.PORT || 8080);
 const FLAG_PATH = process.env.GZCTF_FLAG_FILE || "/flag";
 const CHAIN_ID = Number(process.env.CHAIN_ID || 31337);
 const MNEMONIC = process.env.MNEMONIC || undefined; // optional; random if unset
-const UPGRADE_KEY = process.env.GZCTF_UPGRADE_KEY || undefined; // team-owned upgrade authority
+const UPGRADE_KEY = process.env.GZCTF_UPGRADE_KEY || undefined; // organizer-provisioned override
+const UPGRADE_KEY_FILE = process.env.UPGRADE_KEY_FILE || "/data/secrets/upgrade-key";
+
+// The team's upgrade authority. If the organizer provisioned a key via
+// GZCTF_UPGRADE_KEY, use it; otherwise generate once and persist it so a
+// container restart never destroys the team's defensive authority. The key is
+// never logged — teams read it from the mounted volume (or via `daoctl credentials`).
+function loadOrCreateUpgradeKey() {
+  if (UPGRADE_KEY) return UPGRADE_KEY;
+  try {
+    const existing = fs.readFileSync(UPGRADE_KEY_FILE, "utf8").trim();
+    if (existing) return existing;
+  } catch {}
+  const key = `0x${crypto.randomBytes(32).toString("hex")}`;
+  try {
+    fs.mkdirSync(path.dirname(UPGRADE_KEY_FILE), { recursive: true });
+    fs.writeFileSync(UPGRADE_KEY_FILE, key, { mode: 0o600 });
+  } catch (error) {
+    console.error("warning: could not persist upgrade key:", error.message);
+  }
+  return key;
+}
 
 const app = express();
 app.use(express.json({ limit: "512kb" }));
-// CORS — allow the organizer dashboard (any origin) to read /info + /status.
+// CORS — allow the organizer dashboard (any origin) to read /info.
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -34,65 +56,16 @@ const VULNS = ["oracle", "gauge", "batch", "ghost", "sandwich"];
 
 let system = null;
 let artifacts = null;
-let flagFingerprint = null;
-let nonces = new Map();   // `${player}:${kind}` -> { nonce, expiry }
-let claimed = new Set();  // `${player}:${kind}`
+let roundFingerprint = null;
 
+// The flag file is read ONLY as the per-round reset signal. This service never
+// releases the flag — exploit verification and flag release live in the
+// organizer-side verifier (see ../verifier), outside the team's control.
 function currentFlag() {
   try { return fs.readFileSync(FLAG_PATH, "utf8").trim(); }
   catch { return (process.env.GZCTF_FLAG || "flag{local-development}").trim(); }
 }
 function fingerprint(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
-
-const CLAIM_TYPES = {
-  Claim: [
-    { name: "player", type: "address" },
-    { name: "kind", type: "bytes32" },
-    { name: "proof", type: "address" },
-    { name: "nonce", type: "bytes32" },
-    { name: "expiry", type: "uint64" },
-    { name: "flagEpoch", type: "bytes32" },
-  ],
-};
-
-function claimPayload(player, kind, proof, nonce, expiry) {
-  return {
-    domain: {
-      name: "DAO Defense Claim",
-      version: "1",
-      chainId: system.chainId,
-      verifyingContract: system._addresses.treasury,
-    },
-    types: CLAIM_TYPES,
-    value: {
-      player,
-      kind: ethers.id(kind),
-      proof,
-      nonce,
-      expiry,
-      flagEpoch: `0x${flagFingerprint}`,
-    },
-  };
-}
-
-async function validProof(player, kind, proof) {
-  const a = artifacts;
-  const c = system._addresses;
-  const provider = system.provider;
-  const contract = (address, artifact) => new ethers.Contract(address, artifact.abi, provider);
-  if (kind === "oracle") return (await contract(c.collateral, a.Token).balanceOf(player)) >= ethers.parseEther("100");
-  if (kind === "gauge") return (await contract(c.reward, a.Token).balanceOf(player)) >= ethers.parseEther("500");
-  if (kind === "batch") return (await contract(c.treasuryAsset, a.Token).balanceOf(player)) >= ethers.parseEther("1000");
-  if (kind === "sandwich") return (await contract(c.marketAsset, a.Token).balanceOf(player)) > ethers.parseEther("205");
-  if (kind === "ghost") {
-    const probe = ethers.getAddress(proof);
-    const owner = await contract(probe, a.DelegateProbe).owner();
-    const votes = await contract(c.mirror, a.VoteMirror).votes(probe);
-    const stake = await contract(c.vault, a.GovStakingVault).staked(player);
-    return owner === player && votes >= ethers.parseEther("450") && stake === 0n;
-  }
-  return false;
-}
 
 function publicInfo() {
   return {
@@ -112,15 +85,6 @@ app.get("/artifact/:name", (req, res) => {
   res.json({ abi: artifact.abi, bytecode: artifact.bytecode });
 });
 app.get("/info", (_req, res) => res.json(publicInfo()));
-
-// Which vulnerabilities have been exploited (claimed) on this team's chain.
-app.get("/status", (_req, res) => {
-  const exploited = {};
-  for (const kind of VULNS) {
-    exploited[kind] = [...claimed].some((key) => key.endsWith(":" + kind));
-  }
-  res.json({ exploited });
-});
 
 // Gas + exploit-token faucet (rate-limited once per address per flag epoch).
 app.post("/faucet", async (req, res, next) => {
@@ -153,55 +117,19 @@ app.post("/rpc", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.get("/claim-challenge", (req, res, next) => {
-  try {
-    const player = ethers.getAddress(req.query.player || "");
-    const kind = String(req.query.kind || "");
-    const proof = ethers.getAddress(req.query.proof || ethers.ZeroAddress);
-    if (!VULNS.includes(kind)) return res.status(400).json({ error: "unknown vulnerability" });
-    const nonce = `0x${crypto.randomBytes(32).toString("hex")}`;
-    const expiry = Math.floor(Date.now() / 1000) + 300;
-    nonces.set(`${player}:${kind}`, { nonce, expiry });
-    res.json(claimPayload(player, kind, proof, nonce, expiry));
-  } catch (error) { next(error); }
-});
-
-app.post("/claim", async (req, res, next) => {
-  try {
-    const kind = String(req.body?.kind || "");
-    const player = ethers.getAddress(req.body?.player || "");
-    const proof = ethers.getAddress(req.body?.proof || ethers.ZeroAddress);
-    const nonce = String(req.body?.nonce || "");
-    const key = `${player}:${kind}`;
-    if (!VULNS.includes(kind)) return res.status(400).json({ error: "unknown vulnerability" });
-    if (claimed.has(key)) return res.status(409).json({ error: "vulnerability already claimed" });
-    const session = nonces.get(key);
-    if (!session || session.nonce !== nonce) return res.status(403).json({ error: "bad claim nonce" });
-    const payload = claimPayload(player, kind, proof, nonce, session.expiry);
-    if (ethers.verifyTypedData(payload.domain, payload.types, payload.value, req.body?.signature || "") !== player) {
-      return res.status(403).json({ error: "bad signature" });
-    }
-    nonces.delete(key);
-    if (!(await validProof(player, kind, proof))) return res.status(403).json({ error: "exploit condition not met" });
-    claimed.add(key);
-    res.json({ flag: currentFlag(), vulnerability: kind });
-  } catch (error) { next(error); }
-});
-
 app.use((error, _req, res, _next) => {
   const status = error.status || (error.code === "INVALID_ARGUMENT" ? 400 : 500);
   res.status(status).json({ error: status === 500 ? "internal service error" : error.message });
 });
 
-// Flag-rotation watcher: on a new flag, re-seed state + re-arm claims/faucet.
+// Round-reset watcher: on a new flag epoch, re-seed exploitable state + re-arm
+// the faucet. Proxies and implementations persist across rounds.
 if (require.main === module) {
   setInterval(async () => {
     if (!system) return;
     const fp = fingerprint(currentFlag());
-    if (fp !== flagFingerprint) {
-      flagFingerprint = fp;
-      nonces = new Map();
-      claimed = new Set();
+    if (fp !== roundFingerprint) {
+      roundFingerprint = fp;
       try { await system.reset(); system.resetFunding(); } catch (error) { console.error("reset failed", error); }
     }
   }, 5000).unref();
@@ -209,10 +137,9 @@ if (require.main === module) {
 
 async function boot() {
   artifacts = compileContracts();
-  system = await deploySystem(artifacts, { chainId: CHAIN_ID, mnemonic: MNEMONIC, upgradeKey: UPGRADE_KEY });
-  flagFingerprint = fingerprint(currentFlag());
+  system = await deploySystem(artifacts, { chainId: CHAIN_ID, mnemonic: MNEMONIC, upgradeKey: loadOrCreateUpgradeKey() });
+  roundFingerprint = fingerprint(currentFlag());
   console.log(`[upgrade] team upgrade wallet: ${system.upgradeAddress}`);
-  console.log(`[upgrade] team upgrade key:    ${system.upgradeKey}`);
 }
 
 if (require.main === module) {
@@ -221,4 +148,4 @@ if (require.main === module) {
     .catch((error) => { console.error(error); process.exit(1); });
 }
 
-module.exports = { app, CLAIM_TYPES, claimPayload, boot, publicInfo };
+module.exports = { app, boot, publicInfo };

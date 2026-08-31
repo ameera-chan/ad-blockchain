@@ -2,6 +2,7 @@
 src/node_modules/
 dist/node_modules/
 solver/node_modules/
+verifier/node_modules/
 npm-debug.log
 
 # Python checker

