@@ -20,6 +20,23 @@ authoritative data:
 Only after the signature and on-chain state both check out does it release the
 team's flag.
 
+## Round correctness (baseline-delta)
+
+The verifier proves the attacker **gained** the required amount *during this
+claim session*, not that they currently hold it. When a challenge is issued it
+snapshots the player's balances (`collateral`, `reward`, `treasuryAsset`,
+`marketAsset`); at claim time it re-reads them and verifies the **delta**:
+
+- `oracle`     → `collateral`      +100
+- `gauge`      → `reward`          +500
+- `batch`      → `treasuryAsset`   +1000
+- `sandwich`   → `marketAsset`     +>0
+
+This means an attacker who exploited in round N cannot farm round N+1's flag on
+the same balance — the delta is zero unless they exploit again. The ghost
+vulnerability is scoped instead by a one-shot `usedProbes` set (each exploit
+deploys a fresh probe; a reused proof address is rejected).
+
 ## Config (two secret-safe files)
 
 | File | Purpose | Committed? |
@@ -44,25 +61,28 @@ node register.js team01 http://<team-host>:8081 "flag{round-1}"
 | `GET /claim-challenge?team=&player=&kind=&proof=` | public | EIP-712 challenge (bound to flag epoch, 300s expiry) |
 | `POST /claim` | public | verify signature + expiry + on-chain exploit state, release the flag |
 | `GET /teams` | organizer | registry (rpc/chainId/contracts — no flags) |
+| `POST /flag` | organizer | update a team's round flag (from the GZCTF checker) |
 | `GET /status` | organizer | exploited vulns per team (for the dashboard) |
 
 The organizer-only endpoints are gated by `ADMIN_TOKEN` (bearer header or
-`?token=`). When `ADMIN_TOKEN` is unset (local dev), they are open.
+`?token=`). In production the verifier refuses to start without it.
 
 ## Flag rotation
 
-`flags.json` is the per-round flag source of truth. The organizer (or a GZCTF
-flag-lifecycle hook) rewrites it in place each round — the verifier **re-reads
-it on every claim** (no restart needed), and each claim is scoped to the
-`flagEpoch` (hash of the flag) it was issued under:
+`flags.json` is the per-round flag source of truth. Two ways to keep it current:
 
-- A new round's flag automatically re-arms the same `player+kind`.
-- A claim issued under a previous flag is rejected with `flag rotated`.
+1. **Automatic (recommended):** the GZCTF checker calls the verifier's admin
+   `POST /flag` every tick with `GZCTF_FLAG` + `GZCTF_TEAM_ID` + `GZCTF_ROUND`.
+   Configure the checker with `VERIFIER_URL`, `VERIFIER_ADMIN_TOKEN` (matching
+   the verifier's `ADMIN_TOKEN`), and optionally `VERIFIER_TEAM` to override
+   the registry key. The verifier then always holds the same flag the target
+   service was seeded with — no manual maintenance.
+2. **Manual:** edit `flags.json` and restart the verifier (or call
+   `POST /flag` yourself).
 
-> **Remaining integration:** the *source* of `flags.json` must be GZCTF's
-> round/flag feed so both the target's `/flag` and the verifier agree on the
-> current team flag. Until that hook is wired, the organizer updates
-> `flags.json` (or re-runs `register.js`) each round.
+Each claim is scoped to the `flagEpoch` (hash of the flag) it was issued under:
+a new round's flag re-arms the same `player+kind`, and a claim issued under a
+previous flag is rejected with `flag rotated`.
 
 ## Run
 

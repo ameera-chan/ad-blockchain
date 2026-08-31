@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 import requests
 
+import flagsync
+
 OK, MUMBLE, OFFLINE, INTERNAL_ERROR = 0, 1, 2, 3
 NAMES = {OK: "Ok", MUMBLE: "Mumble", OFFLINE: "Offline", INTERNAL_ERROR: "InternalError"}
 CHECKS = []
@@ -68,6 +70,9 @@ def main():
         print("no checks registered", file=sys.stderr)
         sys.exit(INTERNAL_ERROR)
     target = target_from_env()
+    # Push this tick's flag to the verifier BEFORE the SLA checks. Best-effort:
+    # a verifier outage must not fail the team's SLA verdict.
+    flagsync.sync_flag(target)
     worst = OK
     for fn in CHECKS:
         try:

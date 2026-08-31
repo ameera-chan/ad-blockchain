@@ -6,8 +6,8 @@ pragma solidity ^0.8.24;
  * @author ac
  * @notice Owner-mintable, non-standard ERC-20 used for the challenge's
  *         governance, collateral, debt, LP, reward and treasury assets.
- * @dev No transfer fees, no burn, no permit — just the minimal ledger plus an
- *      owner-restricted mint for the bootstrapping phase.
+ * @dev No transfer fees, no permit — just the minimal ledger plus an
+ *      owner-restricted mint/burn for the bootstrapping and round-reset phases.
  */
 contract Token {
     error Token__NotOwner();
@@ -40,6 +40,18 @@ contract Token {
         if (msg.sender != owner) revert Token__NotOwner();
         balanceOf[to] += amount;
         totalSupply += amount;
+    }
+
+    /// @notice Burns `amount` tokens from `from`. Only the owner may call this.
+    /// @dev Used by the organizer's round reset to restore exact starting
+    ///      balances without redeploying the (immutable) token contracts.
+    /// @param from   Account whose balance is reduced.
+    /// @param amount Quantity of tokens to destroy.
+    function burn(address from, uint256 amount) external {
+        if (msg.sender != owner) revert Token__NotOwner();
+        if (balanceOf[from] < amount) revert Token__InsufficientBalance();
+        balanceOf[from] -= amount;
+        totalSupply -= amount;
     }
 
     /// @notice Approves `spender` to transfer up to `amount` of the caller's balance.

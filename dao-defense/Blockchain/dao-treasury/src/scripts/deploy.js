@@ -126,6 +126,15 @@ async function deploySystem(artifacts, opts = {}) {
   };
   const act = async (contract, method, args = []) =>
     send(await contract.getAddress(), contract.interface.encodeFunctionData(method, args));
+  // Set a token's balance to an EXACT target (burn excess / mint shortfall) so
+  // round resets restore the intended starting state instead of drifting up
+  // each round. The deployer is the Token owner, so both mint and burn work.
+  const setBalance = async (token, to, target) => {
+    const data = token.interface.encodeFunctionData("balanceOf", [to]);
+    const current = BigInt(await provider.send("eth_call", [{ to: await token.getAddress(), data }, "latest"]));
+    if (current > target) await act(token, "burn", [to, current - target]);
+    else if (current < target) await act(token, "mint", [to, target - current]);
+  };
   // Deploy an implementation + transparent proxy, initialize, and return a
   // Contract bound to the proxy address but carrying the implementation ABI.
   const deployProxy = async (artifact, initArgs = []) => {
@@ -217,18 +226,20 @@ async function deploySystem(artifacts, opts = {}) {
     return true;
   };
 
-  // Per-round reset: re-seed the exploitable state (code/proxies persist).
+  // Per-round reset: restore EXACT starting balances (burn excess / mint
+  // shortfall) and re-seed the exploitable state. Code + proxies persist; only
+  // the economic state is reset, so round N+1 starts from the same baseline.
   const reset = async () => {
-    await act(treasuryAsset, "mint", [await treasury.getAddress(), E("10000")]);
-    await act(marketAsset, "mint", [await treasury.getAddress(), E("1000")]);
-    await act(collateral, "mint", [await lending.getAddress(), E("100")]);
+    await setBalance(treasuryAsset, await treasury.getAddress(), E("10000"));
+    await setBalance(marketAsset, await treasury.getAddress(), E("1000"));
+    await setBalance(collateral, await lending.getAddress(), E("100"));
     await act(lending, "seed", [victim, E("100"), E("80")]);
     await act(rewardStaking, "resetMigration", []);
-    await act(reward, "mint", [await legacyGauge.getAddress(), E("2000")]);
+    await setBalance(reward, await legacyGauge.getAddress(), E("2000"));
     // Re-deploy the AMM (not proxied) + re-fund + re-point the treasury.
     amm = await deploy(artifacts.ConstantProductAMM, [await marketAsset.getAddress(), await stable.getAddress()]);
-    await act(marketAsset, "mint", [deployer.address, E("1000")]);
-    await act(stable, "mint", [deployer.address, E("1000")]);
+    await setBalance(marketAsset, deployer.address, E("1000"));
+    await setBalance(stable, deployer.address, E("1000"));
     await act(marketAsset, "approve", [await amm.getAddress(), E("1000")]);
     await act(stable, "approve", [await amm.getAddress(), E("1000")]);
     await act(amm, "addLiquidity", [E("1000"), E("1000")]);
