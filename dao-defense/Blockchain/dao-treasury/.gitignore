@@ -5,6 +5,11 @@ solver/node_modules/
 verifier/node_modules/
 npm-debug.log
 
+# Organizer secrets — the production registry + flags hold real competition
+# secrets, never commit them. Keep the .example files as the committed template.
+verifier/teams.json
+verifier/flags.json
+
 # Python checker
 checker/__pycache__/
 *.pyc

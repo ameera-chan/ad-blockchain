@@ -1,11 +1,20 @@
+const fs = require("node:fs");
+const path = require("node:path");
 const { ethers } = require("ethers");
 
-// ---- JSON-RPC helpers against a team's public gateway -----------------------
+// Canonical interface ABIs — pinned from the authoritative challenge source.
+// The verifier NEVER fetches an ABI or /info from the target team: that would
+// let a defender feed fake addresses or a fake interface to the judge. These
+// minimal interfaces contain exactly the getters the verifier needs.
+const ABIS = {
+  IERC20: load("IERC20"),
+  IVoteMirror: load("IVoteMirror"),
+  IGovStakingVault: load("IGovStakingVault"),
+  IDelegateProbe: load("IDelegateProbe"),
+};
 
-async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
-  return res.json();
+function load(name) {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, "abi", `${name}.json`), "utf8"));
 }
 
 async function ethCall(rpcUrl, to, data) {
@@ -20,39 +29,32 @@ async function ethCall(rpcUrl, to, data) {
 }
 
 /**
- * Verify that an attacker's on-chain state satisfies a vulnerability's success
- * condition. Reads the team's public gateway (never runs inside the team's
- * container), so a defender cannot disable flag release by patching their own
- * service.
+ * Verify an attacker's on-chain state against the organizer's authoritative
+ * contract registry (team.contracts) and pinned ABIs — not the target's /info.
  */
-async function validProof(team, info, player, kind, proof) {
-  const names = ["Token", "DelegateProbe", "VoteMirror", "GovStakingVault"];
-  const abis = {};
-  for (const name of names) {
-    abis[name] = (await fetchJson(`${team.rpc}/artifact/${name}`)).abi;
-  }
+async function validProof(team, player, kind, proof) {
   const iface = {
-    Token: new ethers.Interface(abis.Token),
-    DelegateProbe: new ethers.Interface(abis.DelegateProbe),
-    VoteMirror: new ethers.Interface(abis.VoteMirror),
-    GovStakingVault: new ethers.Interface(abis.GovStakingVault),
+    token: new ethers.Interface(ABIS.IERC20),
+    mirror: new ethers.Interface(ABIS.IVoteMirror),
+    vault: new ethers.Interface(ABIS.IGovStakingVault),
+    probe: new ethers.Interface(ABIS.IDelegateProbe),
   };
-  const c = info.contracts;
+  const c = team.contracts;
   const call = (to, i, fn, ...args) => ethCall(team.rpc, to, i.encodeFunctionData(fn, args));
 
-  if (kind === "oracle") return BigInt(await call(c.collateral, iface.Token, "balanceOf", player)) >= ethers.parseEther("100");
-  if (kind === "gauge") return BigInt(await call(c.reward, iface.Token, "balanceOf", player)) >= ethers.parseEther("500");
-  if (kind === "batch") return BigInt(await call(c.treasuryAsset, iface.Token, "balanceOf", player)) >= ethers.parseEther("1000");
-  if (kind === "sandwich") return BigInt(await call(c.marketAsset, iface.Token, "balanceOf", player)) > ethers.parseEther("205");
+  if (kind === "oracle") return BigInt(await call(c.collateral, iface.token, "balanceOf", player)) >= ethers.parseEther("100");
+  if (kind === "gauge") return BigInt(await call(c.reward, iface.token, "balanceOf", player)) >= ethers.parseEther("500");
+  if (kind === "batch") return BigInt(await call(c.treasuryAsset, iface.token, "balanceOf", player)) >= ethers.parseEther("1000");
+  if (kind === "sandwich") return BigInt(await call(c.marketAsset, iface.token, "balanceOf", player)) > ethers.parseEther("205");
   if (kind === "ghost") {
     const probe = ethers.getAddress(proof);
-    const ownerRaw = await call(probe, iface.DelegateProbe, "owner");
-    const owner = ethers.getAddress(iface.DelegateProbe.decodeFunctionResult("owner", ownerRaw)[0]);
-    const votes = BigInt(await call(c.mirror, iface.VoteMirror, "votes", probe));
-    const stake = BigInt(await call(c.vault, iface.GovStakingVault, "staked", player));
+    const ownerRaw = await call(probe, iface.probe, "owner");
+    const owner = ethers.getAddress(iface.probe.decodeFunctionResult("owner", ownerRaw)[0]);
+    const votes = BigInt(await call(c.mirror, iface.mirror, "votes", probe));
+    const stake = BigInt(await call(c.vault, iface.vault, "staked", player));
     return owner === player && votes >= ethers.parseEther("450") && stake === 0n;
   }
   return false;
 }
 
-module.exports = { validProof, ethCall, fetchJson };
+module.exports = { validProof, ethCall };

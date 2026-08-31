@@ -23,7 +23,7 @@
 </head>
 <body>
 <h1>DAO Treasury Defense — organizer status</h1>
-<p class="sub">Private organizer view. Reads each team's /info and the organizer verifier's /status.</p>
+<p class="sub">Private organizer view. Reads the verifier's registry (/teams) and /status — no hard-coded team targets.</p>
 <table>
   <thead><tr>
     <th>Team</th><th>RPC</th><th>Proxies</th><th>Exploited</th>
@@ -32,11 +32,6 @@
 </table>
 
 <script>
-const TEAMS = [
-  { name: "team01", url: "http://62.238.114.75:8081" },
-  { name: "team02", url: "http://62.238.114.75:8082" },
-  { name: "team03", url: "http://62.238.114.75:8083" },
-];
 const VERIFIER = "http://127.0.0.1:9090";
 const VULNS = ["oracle", "gauge", "batch", "ghost", "sandwich"];
 const PROXIES = ["treasury", "governor", "lending", "legacyGauge", "mirror"];
@@ -44,21 +39,23 @@ const PROXIES = ["treasury", "governor", "lending", "legacyGauge", "mirror"];
 const short = (a) => a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—";
 
 async function load() {
-  const status = await fetch(`${VERIFIER}/status`).then(r => r.json()).catch(() => ({}));
-  const rows = await Promise.all(TEAMS.map(async (t) => {
-    try {
-      const info = await fetch(`${t.url}/info`).then(r => r.json());
-      const c = info.contracts || {};
-      const proxies = PROXIES.map((k) => c[k] ? `<span class="addr" title="${c[k]}">${short(c[k])}</span>` : "—").join(" ");
-      const exploited = (status[t.name] || {});
-      const badges = VULNS.map((v) =>
-        `<span class="badge ${exploited[v] ? "exploited" : "open"}">${exploited[v] ? "✓" : "✗"} ${v}</span>`
-      ).join("");
-      return `<tr><td>${t.name}</td><td><span class="rpc">${t.url}/rpc</span></td><td>${proxies}</td><td>${badges}</td></tr>`;
-    } catch (e) {
-      return `<tr><td>${t.name}</td><td class="err">unreachable</td><td>—</td><td>—</td></tr>`;
-    }
-  }));
+  let teams, status;
+  try {
+    teams = await fetch(`${VERIFIER}/teams`).then(r => r.json());
+    status = await fetch(`${VERIFIER}/status`).then(r => r.json()).catch(() => ({}));
+  } catch (e) {
+    document.getElementById("rows").innerHTML = `<tr><td class="err" colspan="4">verifier unreachable at ${VERIFIER}</td></tr>`;
+    return;
+  }
+  const rows = Object.entries(teams).map(([name, t]) => {
+    const c = t.contracts || {};
+    const proxies = PROXIES.map((k) => c[k] ? `<span class="addr" title="${c[k]}">${short(c[k])}</span>` : "—").join(" ");
+    const exploited = (status[name] || {});
+    const badges = VULNS.map((v) =>
+      `<span class="badge ${exploited[v] ? "exploited" : "open"}">${exploited[v] ? "✓" : "✗"} ${v}</span>`
+    ).join("");
+    return `<tr><td>${name}</td><td><span class="rpc">${t.rpc}/rpc</span></td><td>${proxies}</td><td>${badges}</td></tr>`;
+  });
   document.getElementById("rows").innerHTML = rows.join("");
 }
 

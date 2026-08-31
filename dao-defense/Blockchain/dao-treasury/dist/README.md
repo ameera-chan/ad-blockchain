@@ -1,100 +1,97 @@
-# DAO Treasury Defense — Player Kit
+# DAO Treasury Defense — Defender Kit
 
-This is the Foundry project you patch and use to defend your own service. You
-receive **source, tests, an upgrade script, and connection details** — the
-exploitation (attacking other teams) is your own solver over their RPC.
+This is the package teams receive to defend their instance. It contains the
+challenge source, an upgrade script, tests, and a small CLI.
 
-## What you get from the challenge page
+## What you receive
 
 | Item | Where |
-|---|---|
-| Your RPC URL | `http://<team-ip>:8080` (or `/info`) |
-| Chain ID | discoverable via `eth_chainId` |
-| Contract / proxy addresses | `GET /info` (stable `ServiceProxy` addresses) |
-| Your upgrade credential | team private key (authorizes the ProxyAdmin) |
-| Full ABI / bytecode | `GET /artifact/<Name>` |
+|------|-------|
+| Challenge source (patchable + supporting + interfaces) | `src/` |
+| Upgrade script | `script/Upgrade.s.sol` |
+| Functionality test | `test/DaoDefense.t.sol` |
+| CLI | `tools/daoctl.sh` |
+| Foundry config | `foundry.toml` |
+
+## Setup
+
+```sh
+forge install foundry-rs/forge-std
+forge install OpenZeppelin/openzeppelin-contracts@v4.9.6
+forge install OpenZeppelin/openzeppelin-contracts-upgradeable@v4.9.6
+forge build
+```
+
+> **Remapping note:** this repo's `foundry.toml` maps `@openzeppelin/*/` to the
+> flattened npm layout. If you install via `forge install`, change the
+> remappings to `lib/openzeppelin-contracts/contracts/` and
+> `lib/openzeppelin-contracts-upgradeable/contracts/` respectively.
+
+## Your credentials
+
+| Credential | Purpose |
+|-----------|---------|
+| Your upgrade key | team private key (authorizes the proxy admin) |
+| Your player key | any self-generated key (funded via `POST /faucet`) |
 
 > **Where your upgrade key comes from:** the team service generates it on first
 > boot and persists it to `/data/secrets/upgrade-key` (a mounted volume), so it
 > survives restarts. Read it with `daoctl credentials` (in `tools/`). If the
 > organizer provisioned `GZCTF_UPGRADE_KEY`, that overrides the persisted key.
 > This key — **not** your player key — owns the proxy admin, so it is the only
-> credential that can repoint a
-> proxy.
+> credential that can repoint a proxy.
 
-## Layout
+## Defense workflow
 
-```text
-player/
-├── foundry.toml          Foundry config (solc 0.8.30, OZ remappings)
-├── src/
-│   ├── Token.sol          ERC-20 token + IERC20 interface
-│   ├── AMM.sol            ConstantProductAMM
-│   ├── Lending.sol        OracleHub + LendingVault
-│   ├── Rewards.sol        RewardStaking + LegacyGauge + CurrentGauge
-│   ├── Governance.sol     VoteMirror + GovStakingVault + RiskGovernor
-│   └── Treasury.sol       Treasury
-│   ← PATCH THESE (the vulnerable service)
-├── script/
-│   └── Upgrade.s.sol     deploy patched impl + repoint the proxy
-├── test/
-│   └── DaoDefense.t.sol  minimal functionality test
-└── README.md
-```
+```sh
+cd dist
 
-## One-time setup
+# 1. Read the current state
+./tools/daoctl info
 
-```bash
-forge install OpenZeppelin/openzeppelin-contracts@v4.9.6
-forge install OpenZeppelin/openzeppelin-contracts-upgradeable@v4.9.6
-forge install foundry-rs/forge-std
+# 2. Find a vulnerability in src/patchable/*.sol, patch it.
+#    Keep the storage layout and legitimate behavior intact (upgrade-safe).
+
+# 3. Build
 forge build
-forge test
+
+# 4. Deploy V2 + repoint the proxy (your upgrade key)
+./tools/daoctl upgrade <proxy> src/patchable/<Contract>.sol:<Contract>
 ```
 
-> **Remapping note:** `foundry.toml` maps `@openzeppelin/*/` to the **flattened**
-> npm layout (`.sol` files directly at the package root). `forge install` clones
-> the GitHub repos, where the OpenZeppelin sources live under a `contracts/`
-> subdirectory — so change those two remappings to
-> `lib/openzeppelin-contracts/contracts/` and
-> `lib/openzeppelin-contracts-upgradeable/contracts/` respectively.
+Or manually:
 
-## Defense workflow (patch a vulnerability)
-
-1. Edit the vulnerable contract in `src/` — fix the bug, keep the storage layout of the
-   patched contract **unchanged** (proxies require storage-compatible upgrades;
-   add new state only at the end, never reorder/remove existing variables).
-2. `forge build` and `forge test` locally.
-3. Deploy the patched implementation, then repoint the stable proxy at it
-   (two steps — forge estimates gas for a script's transactions before the
-   deploy lands, so the deploy + `upgradeTo` must be separate):
-
-```bash
-# 1. Deploy the patched V2 (note the "Deployed to:" address)
-forge create src/Treasury.sol:Treasury \
+```sh
+forge create src/patchable/LendingVault.sol:LendingVault \
   --rpc-url $TEAM_RPC_URL --private-key $UPGRADE_KEY --broadcast
 
-# 2. Repoint the proxy (OZ 4.9: your upgrade key IS the proxy admin)
+# OZ 4.9: your upgrade key IS the proxy admin
 cast send $PROXY "upgradeTo(address)" $V2_ADDRESS \
   --rpc-url $TEAM_RPC_URL --private-key $UPGRADE_KEY --gas-limit 200000
 ```
 
-(`script/Upgrade.s.sol` is the same two actions in one script; use it only if
-your forge setup skips pre-broadcast gas estimation.)
+## Attacking opponents (how you score)
 
-The `ServiceProxy` address never changes; the checker keeps targeting it. Your
-patch survives the per-round economic reset (the reset re-seeds balances, not
-code).
+You attack an opponent's **RPC endpoint** directly — there is no `/claim` on
+the target. After exploiting, submit your proof to the **organizer verifier**:
 
-## What NOT to patch
+```
+exploit target /rpc
+        │
+        ▼
+POST /claim to ORGANIZER VERIFIER  (not the target)
+        │
+        ▼
+verifier checks on-chain state → releases the flag
+```
 
-The infrastructure (`TransparentUpgradeableProxy`, `ProxyAdmin`, RPC gateway,
-Anvil) is out of scope. Patching it breaks your SLA and/or your upgrade path —
-same as tampering with the competition platform in a web A/D.
+```sh
+cd solver
+VERIFIER=http://<verifier>:9090 TEAM=<target-team> ./solve.sh http://<target-host>:8081 <your-player-key>
+```
 
-## Attack workflow (other teams)
+## Important
 
-Point your own Foundry/`cast`/solver at a target's RPC (`http://<team-ip>:8080`),
-fund yourself via `POST /faucet`, exploit one of the five vulnerabilities, then
-claim via the EIP-712 flow (`GET /claim-challenge` → sign → `POST /claim`). See
-`solver/` for the official reference solver.
+Patching the supporting infrastructure (the RPC gateway, Anvil, or the upgrade
+mechanism itself) is out of scope — patching it breaks your SLA and/or your
+upgrade path.

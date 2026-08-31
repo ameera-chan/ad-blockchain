@@ -1,10 +1,11 @@
 name: dao-treasury
 author: ac
 description: >
-  DAO Treasury Defense is an Attack–Defense blockchain service. Each player
-  receives a fresh short-lived EVM chain with five independent vulnerability
-  paths. Defenders must repair the contracts without breaking legitimate DAO,
-  lending, staking, gauge, and treasury behavior.
+  DAO Treasury Defense is an Attack–Defense blockchain service. Each team
+  receives an isolated persistent EVM environment with five independent
+  vulnerability paths. Defenders deploy patched implementations behind stable
+  proxies while preserving legitimate DAO, lending, staking, gauge, and
+  treasury behavior.
 type: AttackDefense
 category: Blockchain
 
@@ -18,4 +19,4 @@ ad:
   allowEgress: false
   allowSelfReset: true
   sshRequiresFlag: false
-  selfHosted: true
+  selfHosted: false

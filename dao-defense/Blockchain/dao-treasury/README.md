@@ -1,20 +1,24 @@
 # DAO Treasury Defense
 
-A GZCTF **Attack–Defense** blockchain challenge. Each team gets a self-hosted,
-persistent Anvil chain running a DAO treasury (governance, lending, rewards,
-AMM). The default build intentionally contains **five vulnerabilities**.
-Defenders patch the `patchable/` contracts behind proxies; attackers exploit
-the vulnerable state on opponents' chains to steal their round flag.
+A GZCTF **Attack–Defense** blockchain challenge. Each team gets an isolated
+persistent EVM environment running a DAO treasury (governance, lending,
+rewards, AMM). The default build intentionally contains **five
+vulnerabilities**. Defenders patch the `patchable/` contracts behind proxies;
+attackers exploit the vulnerable state on opponents' chains to steal their
+round flag.
 
 ## Architecture
 
 ```
-GZCTF
+GZCTF (competition UI: teams, routing, scoreboard, SLA)
+  │
+  ├── SLA checker          — "does the service still work?"  (organizer)
+  ├── Attack verifier      — "did this attacker exploit it?" (organizer)
   │
   ▼
-Team service :8080            (one container per team, self-hosted)
+Team service :8080            (one container per team)
   │
-  ├── /health  /info  /status  /faucet  /rpc  /claim-challenge  /claim
+  ├── /health  /info  /artifact  /faucet  /rpc
   │
   ▼
 Internal Anvil                (spawned by deploy.js as a child of the gateway)
@@ -29,6 +33,13 @@ The gateway exposes only the public surface; Anvil's `8545` is never the
 competition endpoint. The RPC proxy allows a fixed allowlist (read methods +
 `eth_sendRawTransaction`) and blocks Anvil admin methods (`evm_*`, `anvil_*`).
 
+### Trust boundary
+
+Exploit verification and flag release live in the **organizer-side verifier**,
+never in the team service. The team can patch contracts; it cannot patch the
+judge. The verifier reads only the organizer's own contract registry + pinned
+ABIs — it never trusts a team's `/info` or `/artifact`.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -41,8 +52,10 @@ competition endpoint. The RPC proxy allows a fixed allowlist (read methods +
 | `src/gateway/server.js` | The public HTTP surface (`/rpc`, `/info`, …) |
 | `src/scripts/deploy.js` | Anvil lifecycle + proxy deployment |
 | `checker/` | Organizer SLA checker (functionality-only) |
+| `verifier/` | Organizer attack verifier (scoring authority) |
 | `solver/` | Organizer reference exploit (Foundry scripts) |
 | `dist/` | The defender package given to teams |
+| `organizer/` | Private organizer dashboard |
 
 ## How to run locally
 
@@ -56,18 +69,18 @@ npm start            # or: GZCTF_FLAG=flag{local} node gateway/server.js
 The service listens on `8080`. Use `/rpc` as the RPC endpoint, `/info` for the
 proxy addresses, and `/faucet` to fund an attacker address with gas + tokens.
 
-## Endpoints
+## Team service endpoints
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /health` | `ok` |
 | `GET /info` | `chainId`, `rpcUrl`, proxy `contracts` map, `victim`, `vulnerabilities`, `upgradeAddress` |
-| `GET /status` | which of the five vulns have been exploited (claimed) |
 | `GET /artifact/:name` | compiled artifact ABI/bytecode |
 | `POST /faucet` | fund `{player}` once per flag epoch |
 | `POST /rpc` | proxied JSON-RPC to the internal Anvil (allowlisted) |
-| `GET /claim-challenge` | EIP-712 challenge for a `(player, kind, proof)` |
-| `POST /claim` | verify exploit state, mint the flag |
+
+Note: there is **no** `/claim` or `/status` on the team service. Exploit
+verification and flag release happen through the organizer verifier.
 
 ## Vulnerabilities
 
@@ -93,29 +106,26 @@ CLI wraps this:
 ./daoctl upgrade <proxy> <contract> # deploy V2 + upgradeTo
 ```
 
-Or do it manually:
-
-```
-forge create src/patchable/LendingVault.sol:LendingVault --rpc-url $RPC --private-key $UPGRADE_KEY --broadcast
-cast send <proxy> "upgradeTo(address)" <newImpl> --rpc-url $RPC --private-key $UPGRADE_KEY
-```
-
 The proxy address stays stable; only the implementation changes.
 
-## Checker
+## Attacker workflow
 
-`checker/` is a functionality-only SLA harness (one-shot, `GZCTF_*` env vars,
-exit code `0 Ok / 1 Mumble / 2 Offline / 3 InternalError`). It verifies health,
-proxy code, token flows, staking, governance, and rebalancing — never whether a
-vulnerability still exists.
+```sh
+cd solver
+VERIFIER=http://<verifier>:9090 TEAM=team02 ./solve.sh http://<team02-host>:8081 <playerKey>
+```
 
-## Environment
+The solver exploits the target's `/rpc`, then submits the proof to the
+organizer verifier (`/claim-challenge` → `/claim`), which checks the on-chain
+state and releases the flag.
+
+## Environment (team service)
 
 | Variable | Description |
 |----------|-------------|
 | `PORT` | HTTP port (default `8080`) |
 | `CHAIN_ID` | Anvil chain id |
 | `MNEMONIC` | optional deterministic deploy mnemonic |
-| `GZCTF_FLAG_FILE` / `GZCTF_FLAG` | round flag (file or env; team-side this is only the round-reset signal) |
+| `GZCTF_FLAG_FILE` / `GZCTF_FLAG` | round flag (team-side this is only the round-reset signal) |
 | `GZCTF_UPGRADE_KEY` | optional organizer-provisioned upgrade key override |
 | `UPGRADE_KEY_FILE` | persisted upgrade key path (default `/data/secrets/upgrade-key`) |

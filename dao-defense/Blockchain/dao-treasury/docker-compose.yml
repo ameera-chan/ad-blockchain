@@ -1,0 +1,12 @@
+# Organizer-side stack: the attack verifier (scoring authority).
+# The per-team services are launched separately (one container per team).
+services:
+  verifier:
+    build: ./verifier
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./verifier/teams.json:/app/teams.json:ro
+    environment:
+      - PORT=9090
+    restart: unless-stopped

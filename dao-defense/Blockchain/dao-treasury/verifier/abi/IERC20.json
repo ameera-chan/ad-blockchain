@@ -1,0 +1,1 @@
+[{"type":"function","name":"balanceOf","stateMutability":"view","inputs":[{"name":"user","internalType":"address","type":"address"}],"outputs":[{"name":"","internalType":"uint256","type":"uint256"}]}]
