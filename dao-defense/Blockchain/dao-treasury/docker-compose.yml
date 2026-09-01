@@ -6,17 +6,18 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      # teams.json is read-only (the verifier never mutates it; register.js
-      # writes it on the host at deploy time).
       - ./verifier/teams.json:/app/teams.json:ro
-      # flags.json is read-write so the verifier's admin POST /flag endpoint
-      # (called by the GZCTF checker each tick) can persist the current flag.
       - ./verifier/flags.json:/app/flags.json
+      # Durable claim/round metadata. Nonces remain intentionally in-memory and
+      # expire quickly; successful claims + used ghost probes survive restarts.
+      - ./verifier/state.json:/app/state.json
     environment:
       - PORT=9090
       - TEAMS_FILE=/app/teams.json
       - FLAGS_FILE=/app/flags.json
-      # Organizer-only endpoints (/teams, /status, /flag) are gated by this
-      # token. The GZCTF checker passes the same token as VERIFIER_ADMIN_TOKEN.
+      - STATE_FILE=/app/state.json
       - ADMIN_TOKEN=${ADMIN_TOKEN:?set ADMIN_TOKEN before composing up}
+      - CLAIM_TTL_SECONDS=${CLAIM_TTL_SECONDS:-300}
+      - CLAIM_RATE_WINDOW_MS=${CLAIM_RATE_WINDOW_MS:-60000}
+      - CLAIM_RATE_MAX=${CLAIM_RATE_MAX:-30}
     restart: unless-stopped
