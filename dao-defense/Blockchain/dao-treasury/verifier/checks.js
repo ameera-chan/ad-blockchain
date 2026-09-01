@@ -23,6 +23,7 @@ async function ethCall(rpcUrl, to, data) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
   });
+  if (!res.ok) throw new Error(`target RPC HTTP ${res.status}`);
   const json = await res.json();
   if (json.error) throw new Error(json.error.message);
   return json.result;
@@ -37,12 +38,6 @@ function interfaces() {
   };
 }
 
-/**
- * Read the on-chain state the verifier needs for a given player/proof. Used to
- * snapshot the baseline at /claim-challenge time and to re-read it at /claim
- * time, so a proof is a DELTA over the claim session rather than an absolute
- * "currently owns X" (which a player could farm across rounds).
- */
 async function readState(team, player, proof) {
   const iface = interfaces();
   const c = team.contracts;
@@ -68,41 +63,27 @@ async function readState(team, player, proof) {
   return state;
 }
 
-// Delta thresholds = the exploit's NET gain (not the faucet seed). The faucet
-// mints 200 marketAsset (and nothing for collateral/reward/treasuryAsset), so
-// these deltas are measured strictly over the claim session after the faucet.
 const DELTA = {
-  oracle: ethers.parseEther("100"),   // liquidate seizes 100 collateral
-  gauge: ethers.parseEther("500"),    // gauge claim nets ~600 reward
-  batch: ethers.parseEther("1000"),   // batch drains 1040 treasury asset
+  oracle: ethers.parseEther("100"),
+  gauge: ethers.parseEther("500"),
+  batch: ethers.parseEther("1000"),
+  // The reference sandwich starts with 200 MKT and ends above 205 MKT. Require
+  // a meaningful net profit rather than merely `> 0`, which could be satisfied
+  // by unrelated transfers or by calling the faucet after the baseline snapshot.
+  sandwich: ethers.parseEther("5"),
 };
 
-/**
- * Verify an attacker's on-chain state against the organizer's authoritative
- * contract registry (team.contracts) and pinned ABIs — not the target's /info.
- *
- * `baseline` is the state snapshot captured when the claim challenge was
- * issued; `now` is re-read at claim time. Balance-based vulnerabilities require
- * the DELTA to meet the threshold, so a previous round's leftover balance does
- * not satisfy a new claim.
- */
 async function validProof(team, player, kind, proof, baseline) {
   const now = await readState(team, player, proof);
 
   if (kind === "oracle") return now.collateral - baseline.collateral >= DELTA.oracle;
   if (kind === "gauge") return now.reward - baseline.reward >= DELTA.gauge;
   if (kind === "batch") return now.treasuryAsset - baseline.treasuryAsset >= DELTA.batch;
-  // Sandwich: any positive market-asset gain this session proves a fresh
-  // rebalance was executed. A positive-but-bounded gain cannot come from the
-  // faucet (which is pre-challenge and rate-limited once per epoch).
-  if (kind === "sandwich") return now.marketAsset - baseline.marketAsset > 0n;
-  // Ghost: absolute conditions are safe because the proof is a freshly-deployed
-  // probe (enforced by the usedProbes set in server.js), so 450 votes can only
-  // have accumulated via this round's stake/withdraw exploit.
+  if (kind === "sandwich") return now.marketAsset - baseline.marketAsset >= DELTA.sandwich;
   if (kind === "ghost") {
     return now.probeOwner === player && now.probeVotes >= ethers.parseEther("450") && now.staked === 0n;
   }
   return false;
 }
 
-module.exports = { validProof, readState, ethCall };
+module.exports = { validProof, readState, ethCall, DELTA };
