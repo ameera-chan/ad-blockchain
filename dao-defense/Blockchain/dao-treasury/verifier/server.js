@@ -13,6 +13,7 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const CLAIM_TTL_SECONDS = Number(process.env.CLAIM_TTL_SECONDS || 300);
 const CLAIM_RATE_WINDOW_MS = Number(process.env.CLAIM_RATE_WINDOW_MS || 60_000);
 const CLAIM_RATE_MAX = Number(process.env.CLAIM_RATE_MAX || 30);
+const CLAIM_RATE_BY_IP = process.env.CLAIM_RATE_BY_IP === "true";
 
 if (process.env.NODE_ENV === "production" && !ADMIN_TOKEN) {
   console.error("fatal: ADMIN_TOKEN is required when NODE_ENV=production");
@@ -72,10 +73,13 @@ const usedProbes = new Set(saved.usedProbes || []);
 const nonces = new Map();
 const rate = new Map();
 
+// FLAGS_FILE is a bind-mounted file in the organizer compose stack. Replacing
+// that mount point with rename(2) can fail with EBUSY, so write it in place.
 function persistFlags() {
-  writeJsonAtomic(FLAGS_FILE, flags);
+  fs.writeFileSync(FLAGS_FILE, JSON.stringify(flags, null, 2) + "\n", { mode: 0o600 });
 }
 
+// STATE_FILE lives on a normal named volume, so atomic replacement is safe.
 function persistState() {
   writeJsonAtomic(STATE_FILE, {
     rounds: Object.fromEntries(rounds),
@@ -129,7 +133,11 @@ function adminOnly(req, res, next) {
 
 function checkRate(req, player) {
   const now = Date.now();
-  const keys = [`ip:${req.ip}`, `player:${player.toLowerCase()}`];
+  const keys = [`player:${player.toLowerCase()}`];
+  // Enable IP limiting only when the deployment preserves the real client IP;
+  // otherwise every player behind one reverse proxy would share one bucket.
+  if (CLAIM_RATE_BY_IP) keys.push(`ip:${req.ip}`);
+
   for (const key of keys) {
     const entry = rate.get(key);
     if (!entry || now - entry.started >= CLAIM_RATE_WINDOW_MS) {
