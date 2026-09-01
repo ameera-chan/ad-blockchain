@@ -4,95 +4,94 @@ The **organizer-controlled** exploit verifier and flag-release authority for the
 DAO Treasury A&D challenge. Teams can patch their contracts; they cannot patch
 the judge.
 
-## Why it exists
+## Trust boundary
 
-The team service (self-hosted or organizer-hosted) must **not** decide whether
-an attacker earns points. This verifier lives on the organizer side and, for
-each claim, checks the on-chain exploit state against the organizer's own
-authoritative data:
+The verifier uses only organizer-owned data for judging claims:
 
-- **Pinned interface ABIs** (`abi/IERC20.json`, `abi/IVoteMirror.json`,
-  `abi/IGovStakingVault.json`, `abi/IDelegateProbe.json`) — never fetched from
-  the target team.
-- **An authoritative contract registry** (`teams.json`) — never the target's
-  `/info`.
+- pinned interface ABIs under `abi/`;
+- the authoritative `teams.json` contract registry;
+- the GZCTF round flag synchronized by the checker.
 
-Only after the signature and on-chain state both check out does it release the
-team's flag.
+It never fetches `/info` or `/artifact` from a defender while deciding a claim.
 
-## Round correctness (baseline-delta)
+## Round correctness
 
-The verifier proves the attacker **gained** the required amount *during this
-claim session*, not that they currently hold it. When a challenge is issued it
-snapshots the player's balances (`collateral`, `reward`, `treasuryAsset`,
-`marketAsset`); at claim time it re-reads them and verifies the **delta**:
+Balance-based proofs use a baseline captured when `/claim-challenge` is issued
+and require a fresh gain before `/claim`:
 
-- `oracle`     → `collateral`      +100
-- `gauge`      → `reward`          +500
-- `batch`      → `treasuryAsset`   +1000
-- `sandwich`   → `marketAsset`     +>0
+| Kind | Required session delta |
+|---|---:|
+| `oracle` | +100 collateral |
+| `gauge` | +500 reward |
+| `batch` | +1000 treasury asset |
+| `sandwich` | +5 market asset |
 
-This means an attacker who exploited in round N cannot farm round N+1's flag on
-the same balance — the delta is zero unless they exploit again. The ghost
-vulnerability is scoped instead by a one-shot `usedProbes` set (each exploit
-deploys a fresh probe; a reused proof address is rejected).
+For `sandwich`, the player must already hold the 200 MKT starter allocation
+before requesting the challenge. This prevents `challenge -> faucet -> claim`
+from being mistaken for sandwich profit.
 
-## Config (two secret-safe files)
+Ghost proofs are one-shot by probe address. Successful claims and used probe
+addresses are persisted in `STATE_FILE`; short-lived claim nonces intentionally
+remain in memory.
+
+## Files
 
 | File | Purpose | Committed? |
-|------|---------|-----------|
-| `teams.json` | per-team registry: `rpc`, `chainId`, `contracts` | no (gitignored) |
-| `flags.json` | per-team round flag (`{ teamId: "flag{…}" }`) | no (gitignored) |
-| `teams.example.json` | committed template | yes |
-| `flags.example.json` | committed template | yes |
-
-Register a freshly-deployed team (captures addresses from its still-trusted
-`/info`, then the verifier never needs `/info` again):
-
-```sh
-node register.js team01 http://<team-host>:8081 "flag{round-1}"
-```
+|---|---|---|
+| `teams.json` | authoritative per-team RPC/contract registry | no |
+| `flags.json` | current GZCTF flag per team | no |
+| `state.json` / `STATE_FILE` | round numbers, successful claims, used ghost probes | no |
+| `teams.example.json` | registry template | yes |
+| `flags.example.json` | flag template | yes |
 
 ## Endpoints
 
 | Endpoint | Access | Description |
-|----------|--------|-------------|
-| `GET /health` | public | `ok` |
-| `GET /claim-challenge?team=&player=&kind=&proof=` | public | EIP-712 challenge (bound to flag epoch, 300s expiry) |
-| `POST /claim` | public | verify signature + expiry + on-chain exploit state, release the flag |
-| `GET /teams` | organizer | registry (rpc/chainId/contracts — no flags) |
-| `POST /flag` | organizer | update a team's round flag (from the GZCTF checker) |
-| `GET /status` | organizer | exploited vulns per team (for the dashboard) |
+|---|---|---|
+| `GET /health` | public | health check |
+| `GET /claim-challenge` | public, rate-limited | issue an EIP-712 challenge and capture baseline state |
+| `POST /claim` | public | verify signature, epoch and exploit-state delta |
+| `GET /teams` | organizer | authoritative target registry |
+| `POST /flag` | organizer | synchronize the current GZCTF flag + round |
+| `GET /status` | organizer | current-round exploit status |
 
-The organizer-only endpoints are gated by `ADMIN_TOKEN` (bearer header or
-`?token=`). In production the verifier refuses to start without it.
+Organizer endpoints require `Authorization: Bearer <ADMIN_TOKEN>`. In
+`NODE_ENV=production`, the verifier refuses to start without `ADMIN_TOKEN`.
 
-## Flag rotation
+## Flag / round synchronization
 
-`flags.json` is the per-round flag source of truth. Two ways to keep it current:
+The custom GZCTF checker calls `POST /flag` each tick with
+`GZCTF_FLAG`, `GZCTF_TEAM_ID`, and `GZCTF_ROUND`. Configure the checker with:
 
-1. **Automatic (recommended):** the GZCTF checker calls the verifier's admin
-   `POST /flag` every tick with `GZCTF_FLAG` + `GZCTF_TEAM_ID` + `GZCTF_ROUND`.
-   Configure the checker with `VERIFIER_URL`, `VERIFIER_ADMIN_TOKEN` (matching
-   the verifier's `ADMIN_TOKEN`), and optionally `VERIFIER_TEAM` to override
-   the registry key. The verifier then always holds the same flag the target
-   service was seeded with — no manual maintenance.
-2. **Manual:** edit `flags.json` and restart the verifier (or call
-   `POST /flag` yourself).
+```text
+VERIFIER_URL
+VERIFIER_ADMIN_TOKEN
+```
 
-Each claim is scoped to the `flagEpoch` (hash of the flag) it was issued under:
-a new round's flag re-arms the same `player+kind`, and a claim issued under a
-previous flag is rejected with `flag rotated`.
+Rounds are monotonic. A late checker from an older round receives `409 stale
+round` and cannot roll the verifier back to an old flag. A conflicting flag for
+the same round is also rejected.
+
+## Abuse controls
+
+`GET /claim-challenge` is bounded by both IP and player-address rate limits, and
+expired nonce sessions are cleaned periodically. Defaults can be adjusted with:
+
+```text
+CLAIM_TTL_SECONDS=300
+CLAIM_RATE_WINDOW_MS=60000
+CLAIM_RATE_MAX=30
+```
 
 ## Run
 
 ```sh
 npm ci
-ADMIN_TOKEN=secret npm start            # listens on 9090
+ADMIN_TOKEN=secret npm start
 ```
 
-Or via Docker (the organizer stack):
+With Docker Compose, `state.json` lives on the `verifier-state` named volume:
 
 ```sh
-ADMIN_TOKEN=secret docker compose up -d --build   # from the repo root
+ADMIN_TOKEN=secret docker compose up -d --build
 ```
