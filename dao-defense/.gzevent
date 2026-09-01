@@ -1,3 +1,11 @@
 name: DAO Defense
 description: Five independent governance and DeFi failures in one Attack/Defense service.
 
+# Event-wide A&D timing. These values are explicit so claim expiry, governance
+# timing and flag rotation are predictable during testing and production.
+ad:
+  tickSeconds: 120
+  flagLifetimeTicks: 5
+  warmupSeconds: 600
+  resetCooldownMinutes: 5
+  allowSnapshotDownload: true
