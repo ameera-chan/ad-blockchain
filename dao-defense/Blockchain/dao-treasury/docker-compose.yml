@@ -8,16 +8,19 @@ services:
     volumes:
       - ./verifier/teams.json:/app/teams.json:ro
       - ./verifier/flags.json:/app/flags.json
-      # Durable claim/round metadata. Nonces remain intentionally in-memory and
-      # expire quickly; successful claims + used ghost probes survive restarts.
-      - ./verifier/state.json:/app/state.json
+      # Durable successful-claim/round metadata. A named volume avoids requiring
+      # a pre-created host state.json file.
+      - verifier-state:/data
     environment:
       - PORT=9090
       - TEAMS_FILE=/app/teams.json
       - FLAGS_FILE=/app/flags.json
-      - STATE_FILE=/app/state.json
+      - STATE_FILE=/data/state.json
       - ADMIN_TOKEN=${ADMIN_TOKEN:?set ADMIN_TOKEN before composing up}
       - CLAIM_TTL_SECONDS=${CLAIM_TTL_SECONDS:-300}
       - CLAIM_RATE_WINDOW_MS=${CLAIM_RATE_WINDOW_MS:-60000}
       - CLAIM_RATE_MAX=${CLAIM_RATE_MAX:-30}
     restart: unless-stopped
+
+volumes:
+  verifier-state:
