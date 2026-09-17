@@ -1,0 +1,16 @@
+{
+  "name": "dao-defense-service",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node gateway/server.js"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "4.9.6",
+    "@openzeppelin/contracts-upgradeable": "4.9.6",
+    "ethers": "6.17.0",
+    "express": "5.1.0",
+    "express-rate-limit": "^8.7.0",
+    "solc": "0.8.30"
+  }
+}

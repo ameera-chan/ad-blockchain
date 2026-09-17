@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#020817" />
+  <title>DAO Treasury</title>
+  <link rel="stylesheet" href="/ui/styles.css?v=20260908" />
+  <script src="/ui/app.js?v=20260908" defer></script>
+</head>
+
+<body>
+  <div class="page">
+    <section class="status-bar">
+      <div class="status" id="status-pill">
+        <span class="status-dot"></span>
+        <strong id="status-text">Connecting</strong>
+      </div>
+      <div class="navigation-actions">
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+    </section>
+
+    <main>
+      <div class="dashboard-grid">
+        <section class="panel wallet-panel">
+          <div class="balance-grid" id="wallet-balances"></div>
+          <div class="recovery-notice" id="recovery-notice" hidden></div>
+        </section>
+
+        <section class="panel credentials-panel">
+          <div class="panel-title">
+            <h2>Service Information</h2><button type="button" id="copy-all">Copy All</button>
+          </div>
+          <div id="credentials">Loading instance...</div>
+        </section>
+      </div>
+
+      <section class="panel faucet-panel">
+        <h2>Faucet</h2>
+        <form id="faucet-form">
+          <input id="faucet-address" name="player" autocomplete="off" spellcheck="false"
+            placeholder="0x wallet address" required />
+          <button id="faucet-button" type="submit">Request Funds</button>
+        </form>
+        <div class="form-message" id="faucet-message" role="status"></div>
+      </section>
+    </main>
+  </div>
+</body>
+
+</html>

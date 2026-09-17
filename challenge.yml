@@ -1,0 +1,19 @@
+name: DAO Treasury
+author: ac
+description: >
+  Raid other teams' DAO treasuries and secure your own before they do the same to you.
+
+type: AttackDefense
+category: Blockchain
+
+container:
+  memoryLimit: 1024
+  cpuCount: 2
+  storageLimit: 1024
+  exposePort: 8080
+
+ad:
+  allowEgress: true
+  allowSelfReset: true
+  sshRequiresFlag: false
+  selfHosted: false
