@@ -3,18 +3,18 @@ pragma solidity ^0.8.24;
 
 import {IGauge} from "../interfaces/IGauge.sol";
 
-contract CurrentGauge is IGauge {
-    error CurrentGauge__NotStaking();
+contract RewardGaugeV2 is IGauge {
+    error RewardGaugeV2__NotStaking();
 
     address public immutable staking;
     mapping(address => uint256) public observedBalance;
 
-    constructor(address s) {
-        staking = s;
+    constructor(address staking_) {
+        staking = staking_;
     }
 
     function onBalanceChange(address user, uint256, uint256 newBalance) external {
-        if (msg.sender != staking) revert CurrentGauge__NotStaking();
+        if (msg.sender != staking) revert RewardGaugeV2__NotStaking();
         observedBalance[user] = newBalance;
     }
 }

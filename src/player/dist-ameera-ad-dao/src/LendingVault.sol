@@ -27,11 +27,15 @@ contract LendingVault is Initializable {
 
     mapping(address => Position) public positions;
 
-    function initialize(address c, address d, address o) public initializer {
+    function initialize(
+        address collateralToken_,
+        address debtToken_,
+        address oracle_
+    ) public initializer {
         owner = msg.sender;
-        collateralToken = IERC20(c);
-        debtToken = IERC20(d);
-        oracle = OracleHub(o);
+        collateralToken = IERC20(collateralToken_);
+        debtToken = IERC20(debtToken_);
+        oracle = OracleHub(oracle_);
     }
 
     function seed(address user, uint128 collateral, uint128 debt) external {

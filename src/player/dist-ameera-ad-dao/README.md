@@ -3,7 +3,7 @@
 The service dashboard provides:
 
 - `RPC_URL`
-- `SETUP_CONTRACT_ADDRESS`
+- `PROTOCOL_REGISTRY_ADDRESS`
 - `WALLET_ADDRESS`
 
 Use your GZCTF A&D SSH session to read your team credentials:

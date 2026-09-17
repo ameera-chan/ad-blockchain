@@ -17,7 +17,7 @@ contract VoteMirror is IVotesUpgradeable, Initializable {
     address public owner;
     address public vault;
 
-    uint256 public syncFailureCount;
+    uint256 public syncAttemptsFailed;
 
     mapping(address => uint256) public votes;
     mapping(address => Checkpoints.Trace224) private voteCheckpoints;
@@ -27,14 +27,14 @@ contract VoteMirror is IVotesUpgradeable, Initializable {
         owner = msg.sender;
     }
 
-    function setVault(address v) external {
+    function setVault(address vault_) external {
         if (msg.sender != owner || vault != address(0)) revert VoteMirror__NotOwnerOrVaultSet();
-        vault = v;
+        vault = vault_;
     }
 
-    function resetSyncStatus() external {
+    function resetDiagnostics() external {
         if (msg.sender != owner) revert VoteMirror__NotOwner();
-        syncFailureCount = 0;
+        syncAttemptsFailed = 0;
     }
 
     function sync(address delegatee, int256 delta) external returns (bool) {
@@ -42,7 +42,7 @@ contract VoteMirror is IVotesUpgradeable, Initializable {
 
         (bool ok,) = delegatee.call(abi.encodeWithSignature("onVoteSync(int256)", delta));
         if (!ok) {
-            syncFailureCount += 1;
+            syncAttemptsFailed += 1;
             return false;
         }
 

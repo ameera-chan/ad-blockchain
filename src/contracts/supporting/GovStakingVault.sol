@@ -16,9 +16,9 @@ contract GovStakingVault {
     mapping(address => uint256) public staked;
     mapping(address => address) public delegateOf;
 
-    constructor(address t, address m) {
-        token = IERC20(t);
-        mirror = VoteMirror(m);
+    constructor(address token_, address mirror_) {
+        token = IERC20(token_);
+        mirror = VoteMirror(mirror_);
     }
 
     function stake(uint256 amount, address delegatee) external {

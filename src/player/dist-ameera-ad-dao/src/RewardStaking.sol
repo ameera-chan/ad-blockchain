@@ -3,8 +3,9 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "./IERC20.sol";
 import {IGauge} from "./IGauge.sol";
+import {IMigration} from "./IMigration.sol";
 
-contract RewardStaking {
+contract RewardStaking is IMigration {
     error RewardStaking__NotOwner();
     error RewardStaking__NotOwnerOrConfigured();
     error RewardStaking__MigrationNotReady();
@@ -16,33 +17,33 @@ contract RewardStaking {
     mapping(address => uint256) public balanceOf;
 
     address[] public activeGauges;
-    address public oldGauge;
-    address public migrationTarget;
-    bool public migrated;
-    uint256 public migrationEpoch;
+    address public previousGauge;
+    address public nextGauge;
+    bool public override migrated;
+    uint256 public override migrationEpoch;
     mapping(address => uint256) private capturedEpoch;
-    mapping(address => uint256) private capturedBalance;
+    mapping(address => uint256) private transitionBalance;
 
-    constructor(address t) {
-        token = IERC20(t);
+    constructor(address token_) {
+        token = IERC20(token_);
         owner = msg.sender;
     }
 
-    function configureMigration(address oldG, address newG) external {
+    function configureMigration(address previousGauge_, address nextGauge_) external {
         if (msg.sender != owner || activeGauges.length != 0) revert RewardStaking__NotOwnerOrConfigured();
 
-        oldGauge = oldG;
-        migrationTarget = newG;
-        activeGauges.push(oldG);
+        previousGauge = previousGauge_;
+        nextGauge = nextGauge_;
+        activeGauges.push(previousGauge_);
     }
 
     function finalizeMigration() external {
-        if (migrated || oldGauge == address(0)) revert RewardStaking__MigrationNotReady();
+        if (migrated || previousGauge == address(0)) revert RewardStaking__MigrationNotReady();
 
         migrated = true;
         migrationEpoch += 1;
         delete activeGauges;
-        activeGauges.push(migrationTarget);
+        activeGauges.push(nextGauge);
     }
 
     function resetMigration() external {
@@ -54,7 +55,7 @@ contract RewardStaking {
 
         migrated = false;
         delete activeGauges;
-        activeGauges.push(oldGauge);
+        activeGauges.push(previousGauge);
     }
 
     function stake(uint256 amount) external {
@@ -76,15 +77,15 @@ contract RewardStaking {
         token.transfer(msg.sender, amount);
     }
 
-    function migrationBalance(address user) external view returns (uint256) {
+    function balanceAtTransition(address user) external view override returns (uint256) {
         if (!migrated) return 0;
-        return capturedEpoch[user] == migrationEpoch ? capturedBalance[user] : balanceOf[user];
+        return capturedEpoch[user] == migrationEpoch ? transitionBalance[user] : balanceOf[user];
     }
 
     function _capture(address user, uint256 oldBalance) private {
         if (migrated && capturedEpoch[user] != migrationEpoch) {
             capturedEpoch[user] = migrationEpoch;
-            capturedBalance[user] = oldBalance;
+            transitionBalance[user] = oldBalance;
         }
     }
 

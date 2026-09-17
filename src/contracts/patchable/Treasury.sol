@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import {IERC20} from "../interfaces/IERC20.sol";
-import {ConstantProductAMM} from "../supporting/AMM.sol";
+import {ConstantProductAMM} from "../supporting/ConstantProductAMM.sol";
 
 contract Treasury is Initializable {
     error Treasury__NotOwner();
@@ -25,17 +25,17 @@ contract Treasury is Initializable {
         owner = msg.sender;
     }
 
-    function setGovernor(address g) external {
+    function setGovernor(address governor_) external {
         if (msg.sender != owner || governor != address(0)) revert Treasury__NotOwnerOrGovernorSet();
-        governor = g;
+        governor = governor_;
     }
 
-    function configureRebalance(address a, address tokenIn, address tokenOut) external {
+    function configureRebalance(address amm_, address tokenIn_, address tokenOut_) external {
         if (msg.sender != owner) revert Treasury__NotOwner();
 
-        amm = a;
-        rebalanceToken = tokenIn;
-        settlementToken = tokenOut;
+        amm = amm_;
+        rebalanceToken = tokenIn_;
+        settlementToken = tokenOut_;
     }
 
     function resetRebalanceState() external {

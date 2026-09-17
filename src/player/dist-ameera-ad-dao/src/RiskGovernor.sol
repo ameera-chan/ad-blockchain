@@ -50,20 +50,20 @@ contract RiskGovernor is
     bool private creatingBatch;
 
     function initialize(
-        address m,
-        address timelock,
-        address t,
-        address asset,
-        uint256 threshold
+        address voteToken_,
+        address timelock_,
+        address treasury_,
+        address treasuryAsset_,
+        uint256 reviewThreshold_
     ) public initializer {
         __Governor_init("DAO Risk Governor");
         __GovernorSettings_init(0, 2, 0);
-        __GovernorVotes_init(IVotesUpgradeable(m));
-        __GovernorTimelockControl_init(TimelockControllerUpgradeable(payable(timelock)));
+        __GovernorVotes_init(IVotesUpgradeable(voteToken_));
+        __GovernorTimelockControl_init(TimelockControllerUpgradeable(payable(timelock_)));
 
-        treasury = Treasury(t);
-        treasuryToken = asset;
-        reviewThreshold = threshold;
+        treasury = Treasury(treasury_);
+        treasuryToken = treasuryAsset_;
+        reviewThreshold = reviewThreshold_;
     }
 
     function proposeBatch(

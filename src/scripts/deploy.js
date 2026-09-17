@@ -13,6 +13,7 @@ const { ethers } = require("ethers");
 
 const E = ethers.parseEther;
 const BLOCK_GAS_LIMIT = 30_000_000n;
+const STATE_SCHEMA_VERSION = 2;
 
 const PROPOSER_ROLE = ethers.id("PROPOSER_ROLE");
 const EXECUTOR_ROLE = ethers.id("EXECUTOR_ROLE");
@@ -33,15 +34,15 @@ const ARTIFACT_FOR = {
   mirror: "VoteMirror",
   vault: "GovStakingVault",
   treasury: "Treasury",
-  timelock: "ArenaTimelock",
+  timelock: "DaoTimelock",
   governor: "RiskGovernor",
   oracle: "OracleHub",
   lending: "LendingVault",
   rewardStaking: "RewardStaking",
-  legacyGauge: "LegacyGauge",
-  currentGauge: "CurrentGauge",
+  rewardGaugeV1: "RewardGaugeV1",
+  rewardGaugeV2: "RewardGaugeV2",
   amm: "ConstantProductAMM",
-  setup: "Setup",
+  registry: "ProtocolRegistry",
 };
 
 function randomMnemonic() {
@@ -59,7 +60,7 @@ function allocatePort() {
   throw new Error("no free port for anvil");
 }
 
-function deriveVictim(mnemonic, chainId) {
+function deriveReferenceBorrower(mnemonic, chainId) {
   const hash = ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
       ["string", "uint256"],
@@ -223,25 +224,30 @@ async function deploySystem(artifacts, opts = {}) {
   if (metaFile) {
     try {
       const parsed = JSON.parse(fs.readFileSync(metaFile, "utf8"));
-      if (parsed.chainId === Number(cid) && parsed.mnemonic === mnemonic && parsed.addresses) {
+      if (
+        parsed.schemaVersion === STATE_SCHEMA_VERSION &&
+        parsed.chainId === Number(cid) &&
+        parsed.mnemonic === mnemonic &&
+        parsed.addresses
+      ) {
         meta = parsed;
       }
     } catch { }
   }
 
   let contracts;
-  let victim;
+  let referenceBorrower;
   let addresses;
 
   if (meta) {
     contracts = {};
     for (const [name, artifactName] of Object.entries(ARTIFACT_FOR)) {
       const addr = meta.addresses[name];
-      if (!addr && name === "setup") continue;
+      if (!addr && name === "registry") continue;
       if (!addr) throw new Error(`resume metadata missing address for "${name}"`);
       contracts[name] = new ethers.Contract(addr, artifacts[artifactName].abi);
     }
-    victim = meta.victim;
+    referenceBorrower = meta.referenceBorrower;
     addresses = { ...meta.addresses };
   } else {
     const token = async (name, symbol) => deploy(artifacts.Token, [name, symbol]);
@@ -256,7 +262,7 @@ async function deploySystem(artifacts, opts = {}) {
 
     const mirror = await deployProxy(artifacts.VoteMirror, []);
     const treasury = await deployProxy(artifacts.Treasury, []);
-    const timelock = await deploy(artifacts.ArenaTimelock, [deployer.address, await treasury.getAddress(), await treasuryAsset.getAddress()]);
+    const timelock = await deploy(artifacts.DaoTimelock, [deployer.address, await treasury.getAddress(), await treasuryAsset.getAddress()]);
     const governor = await deployProxy(artifacts.RiskGovernor, [
       await mirror.getAddress(), await timelock.getAddress(), await treasury.getAddress(), await treasuryAsset.getAddress(), E("500"),
     ]);
@@ -274,10 +280,10 @@ async function deploySystem(artifacts, opts = {}) {
     ]);
 
     const rewardStaking = await deploy(artifacts.RewardStaking, [await lp.getAddress()]);
-    const legacyGauge = await deployProxy(artifacts.LegacyGauge, [await rewardStaking.getAddress(), await reward.getAddress()]);
-    const currentGauge = await deploy(artifacts.CurrentGauge, [await rewardStaking.getAddress()]);
-    await act(rewardStaking, "configureMigration", [await legacyGauge.getAddress(), await currentGauge.getAddress()]);
-    await act(reward, "configureRewards", [await legacyGauge.getAddress(), await rewardStaking.getAddress()]);
+    const rewardGaugeV1 = await deployProxy(artifacts.RewardGaugeV1, [await rewardStaking.getAddress(), await reward.getAddress()]);
+    const rewardGaugeV2 = await deploy(artifacts.RewardGaugeV2, [await rewardStaking.getAddress()]);
+    await act(rewardStaking, "configureMigration", [await rewardGaugeV1.getAddress(), await rewardGaugeV2.getAddress()]);
+    await act(reward, "configureRewards", [await rewardGaugeV1.getAddress(), await rewardStaking.getAddress()]);
 
     const amm = await deploy(artifacts.ConstantProductAMM, [await marketAsset.getAddress(), await stable.getAddress()]);
     await act(marketAsset, "mint", [deployer.address, E("1000")]);
@@ -288,12 +294,12 @@ async function deploySystem(artifacts, opts = {}) {
     await act(amm, "setTreasury", [await treasury.getAddress()]);
     await act(treasury, "configureRebalance", [await amm.getAddress(), await marketAsset.getAddress(), await stable.getAddress()]);
 
-    victim = deriveVictim(mnemonic, chainId);
+    referenceBorrower = deriveReferenceBorrower(mnemonic, chainId);
     await act(treasuryAsset, "mint", [await treasury.getAddress(), E("10000")]);
     await act(marketAsset, "mint", [await treasury.getAddress(), E("1000")]);
     await act(collateral, "mint", [await lending.getAddress(), E("100")]);
-    await act(lending, "seed", [victim, E("100"), E("80")]);
-    await act(reward, "mint", [await legacyGauge.getAddress(), E("2000")]);
+    await act(lending, "seed", [referenceBorrower, E("100"), E("80")]);
+    await act(reward, "mint", [await rewardGaugeV1.getAddress(), E("2000")]);
     const block = await provider.getBlock("latest");
     const ts = Number(block.timestamp);
     await act(oracle, "setReport", [await collateral.getAddress(), 1, E("2"), ts]);
@@ -304,17 +310,17 @@ async function deploySystem(artifacts, opts = {}) {
     contracts = {
       gov, treasuryAsset, collateral, debt, lp, reward, marketAsset, stable,
       mirror, vault, treasury, timelock, governor, oracle, lending, rewardStaking,
-      legacyGauge, currentGauge, amm,
+      rewardGaugeV1, rewardGaugeV2, amm,
     };
     addresses = {};
     for (const [name, c] of Object.entries(contracts)) addresses[name] = await c.getAddress();
 
-    const setup = await deploy(artifacts.Setup, [
-      victim, addresses.lending, addresses.legacyGauge, addresses.governor,
+    const registry = await deploy(artifacts.ProtocolRegistry, [
+      referenceBorrower, addresses.lending, addresses.rewardGaugeV1, addresses.governor,
       addresses.mirror, addresses.treasury,
     ]);
-    contracts.setup = setup;
-    addresses.setup = await setup.getAddress();
+    contracts.registry = registry;
+    addresses.registry = await registry.getAddress();
 
     await send(upgradeWallet.address, "0x", E("20"));
 
@@ -322,22 +328,22 @@ async function deploySystem(artifacts, opts = {}) {
       fs.mkdirSync(path.dirname(metaFile), { recursive: true });
       fs.writeFileSync(
         metaFile,
-        JSON.stringify({ chainId: Number(cid), mnemonic, victim, addresses }, null, 2)
+        JSON.stringify({ schemaVersion: STATE_SCHEMA_VERSION, chainId: Number(cid), mnemonic, referenceBorrower, addresses }, null, 2)
       );
     }
   }
 
-  if (!contracts.setup) {
-    const setup = await deploy(artifacts.Setup, [
-      victim, addresses.lending, addresses.legacyGauge, addresses.governor,
+  if (!contracts.registry) {
+    const registry = await deploy(artifacts.ProtocolRegistry, [
+      referenceBorrower, addresses.lending, addresses.rewardGaugeV1, addresses.governor,
       addresses.mirror, addresses.treasury,
     ]);
-    contracts.setup = setup;
-    addresses.setup = await setup.getAddress();
+    contracts.registry = registry;
+    addresses.registry = await registry.getAddress();
     if (metaFile) {
       fs.writeFileSync(
         metaFile,
-        JSON.stringify({ chainId: Number(cid), mnemonic, victim, addresses }, null, 2)
+        JSON.stringify({ schemaVersion: STATE_SCHEMA_VERSION, chainId: Number(cid), mnemonic, referenceBorrower, addresses }, null, 2)
       );
     }
   }
@@ -380,7 +386,7 @@ async function deploySystem(artifacts, opts = {}) {
     await setBalance(contracts.stable, await contracts.treasury.getAddress(), E("0"));
     await setBalance(contracts.collateral, await contracts.lending.getAddress(), E("100"));
     await setBalance(contracts.debt, await contracts.lending.getAddress(), E("0"));
-    await act(contracts.lending, "seed", [victim, E("100"), E("80")]);
+    await act(contracts.lending, "seed", [referenceBorrower, E("100"), E("80")]);
 
     const block = await provider.getBlock("latest");
     const ts = Number(block.timestamp);
@@ -390,8 +396,8 @@ async function deploySystem(artifacts, opts = {}) {
     await act(contracts.oracle, "setReport", [await contracts.debt.getAddress(), 2, E("1"), ts]);
 
     await act(contracts.rewardStaking, "resetMigration", []);
-    await setBalance(contracts.reward, await contracts.legacyGauge.getAddress(), E("2000"));
-    await act(contracts.mirror, "resetSyncStatus", []);
+    await setBalance(contracts.reward, await contracts.rewardGaugeV1.getAddress(), E("2000"));
+    await act(contracts.mirror, "resetDiagnostics", []);
     await act(contracts.treasury, "resetRebalanceState", []);
 
     await setBalance(contracts.marketAsset, await contracts.amm.getAddress(), E("1000"));
@@ -413,7 +419,7 @@ async function deploySystem(artifacts, opts = {}) {
     fund,
     refreshOracle,
     stop,
-    _addresses: { ...addresses, victim }
+    _addresses: { ...addresses, referenceBorrower }
   };
 }
 

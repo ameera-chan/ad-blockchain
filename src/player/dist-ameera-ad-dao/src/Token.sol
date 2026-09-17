@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-interface IMigration {
-    function migrated() external view returns (bool);
-    function migrationEpoch() external view returns (uint256);
-    function migrationBalance(address) external view returns (uint256);
-}
+import {IMigration} from "./IMigration.sol";
+import {IERC20} from "./IERC20.sol";
 
-contract Token {
+contract Token is IERC20 {
     error Token__NotOwner();
     error Token__InsufficientAllowance();
     error Token__InsufficientBalance();
@@ -20,25 +17,25 @@ contract Token {
     uint256 public totalSupply;
     address public immutable owner;
 
-    mapping(address => uint256) public balanceOf;
+    mapping(address => uint256) public override balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => bool) public grantIssued;
-    mapping(address => mapping(address => uint256)) public receivedFrom;
+    mapping(address => mapping(address => uint256)) public transferVolume;
     address public rewardPool;
     IMigration public rewardStaking;
     mapping(uint256 => mapping(address => uint256)) private bonusPaid;
-    mapping(address => uint256) public excessRewards;
+    mapping(address => uint256) public rewardAdjustment;
 
-    function configureRewards(address pool, address staking) external {
+    function configureRewards(address rewardPool_, address staking_) external {
         if (msg.sender != owner) revert Token__NotOwner();
         if (rewardPool != address(0)) revert Token__RewardsConfigured();
-        rewardPool = pool;
-        rewardStaking = IMigration(staking);
+        rewardPool = rewardPool_;
+        rewardStaking = IMigration(staking_);
     }
 
-    constructor(string memory n, string memory s) {
-        name = n;
-        symbol = s;
+    constructor(string memory name_, string memory symbol_) {
+        name = name_;
+        symbol = symbol_;
         owner = msg.sender;
     }
 
@@ -66,17 +63,17 @@ contract Token {
         totalSupply -= amount;
     }
 
-    function approve(address spender, uint256 amount) external returns (bool) {
+    function approve(address spender, uint256 amount) external override returns (bool) {
         allowance[msg.sender][spender] = amount;
         return true;
     }
 
-    function transfer(address to, uint256 amount) external returns (bool) {
+    function transfer(address to, uint256 amount) external override returns (bool) {
         _transfer(msg.sender, to, amount);
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) external override returns (bool) {
         uint256 a = allowance[from][msg.sender];
         if (a < amount) revert Token__InsufficientAllowance();
 
@@ -92,14 +89,14 @@ contract Token {
         if (balanceOf[from] < amount) revert Token__InsufficientBalance();
         balanceOf[from] -= amount;
         balanceOf[to] += amount;
-        receivedFrom[from][to] += amount;
+        transferVolume[from][to] += amount;
         if (from == rewardPool && amount > 0) {
             uint256 allowed;
             uint256 epoch = rewardStaking.migrationEpoch();
-            if (rewardStaking.migrated()) allowed = rewardStaking.migrationBalance(to) / 10;
+            if (rewardStaking.migrated()) allowed = rewardStaking.balanceAtTransition(to) / 10;
             uint256 paid = bonusPaid[epoch][to];
             uint256 remaining = allowed > paid ? allowed - paid : 0;
-            if (amount > remaining) excessRewards[to] += amount - remaining;
+            if (amount > remaining) rewardAdjustment[to] += amount - remaining;
             bonusPaid[epoch][to] = paid + amount;
         }
     }

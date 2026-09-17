@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-contract Setup {
-    address public immutable victim;
+contract ProtocolRegistry {
+    address public immutable referenceBorrower;
     address public immutable lendingVault;
-    address public immutable legacyGauge;
+    address public immutable rewardGaugeV1;
     address public immutable riskGovernor;
     address public immutable voteMirror;
     address public immutable daoTreasury;
 
     constructor(
-        address victim_,
+        address referenceBorrower_,
         address lendingVault_,
-        address legacyGauge_,
+        address rewardGaugeV1_,
         address riskGovernor_,
         address voteMirror_,
         address daoTreasury_
     ) {
-        victim = victim_;
+        referenceBorrower = referenceBorrower_;
         lendingVault = lendingVault_;
-        legacyGauge = legacyGauge_;
+        rewardGaugeV1 = rewardGaugeV1_;
         riskGovernor = riskGovernor_;
         voteMirror = voteMirror_;
         daoTreasury = daoTreasury_;

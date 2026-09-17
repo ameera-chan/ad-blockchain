@@ -14,9 +14,9 @@ MAX_RPC_BATCH = 20
 IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
 
 SELECTOR = {
-    "victim": "0x930c2003",
+    "reference_borrower": "0x4d9e6e9d",
     "lending": "0xcb8c5a3a",
-    "legacy": "0x531c1d87",
+    "gauge_v1": "0xdcafea1e",
     "risk": "0x93cd5556",
     "mirror": "0x9844841a",
     "treasury": "0x79022a9f",
@@ -36,7 +36,7 @@ SELECTOR = {
     "voting_delay": "0x3932abb1",
     "voting_period": "0x02a251a3",
     "vault": "0xfbfa77cf",
-    "sync_failures": "0x865af872",
+    "sync_attempts_failed": "0x708a3b66",
     "governor": "0x0c340a24",
     "amm": "0x2a943945",
     "rebalance_token": "0x0a6c5a92",
@@ -45,8 +45,8 @@ SELECTOR = {
     "last_rebalance_output": "0x7892badd",
     "token": "0xfc0c546a",
     "mirror_ref": "0x444d9172",
-    "old_gauge": "0x6d6c0a53",
-    "migration_target": "0x5b51acff",
+    "previous_gauge": "0xc5d5ce7d",
+    "next_gauge": "0x71304ed3",
     "migrated": "0x2c678c64",
     "balance_of": "0x70a08231",
     "token0": "0x0dfe1681",
@@ -58,7 +58,7 @@ SELECTOR = {
     "reset_rebalance": "0x9b88cabf",
     "seed": "0x96546dca",
     "sync": "0xaed625b1",
-    "reset_sync": "0xf7aad227",
+    "reset_diagnostics": "0xe21d09ba",
     "balance_change": "0x720ea645",
     "rebalance": "0xf4993018",
     "propose_batch": "0xa93830e8",
@@ -182,8 +182,8 @@ def public_service(target):
     info = self_info(target)
     if info.get("rpcUrl") != "/rpc":
         raise Mumble("invalid RPC information")
-    if not ADDRESS.fullmatch(info.get("setupContract", "")):
-        raise Mumble("invalid setup contract")
+    if not ADDRESS.fullmatch(info.get("registryContract", "")):
+        raise Mumble("invalid protocol registry")
     if not ADDRESS.fullmatch(info.get("playerAddress", "")):
         raise Mumble("invalid wallet information")
 
@@ -201,27 +201,27 @@ def public_service(target):
 
 @check
 def contract_integrity(target):
-    setup = self_info(target)["setupContract"]
-    registry_names = ("victim", "lending", "legacy", "risk", "mirror", "treasury")
-    registry_values = rpc_batch(target, [call(setup, SELECTOR[name]) for name in registry_names])
+    registry = self_info(target)["registryContract"]
+    registry_names = ("reference_borrower", "lending", "gauge_v1", "risk", "mirror", "treasury")
+    registry_values = rpc_batch(target, [call(registry, SELECTOR[name]) for name in registry_names])
     topology = dict(zip(registry_names, (decode_address(value) for value in registry_values)))
 
     ensure_nonzero_addresses(topology.values())
-    contracts = [topology[name] for name in registry_names if name != "victim"]
+    contracts = [topology[name] for name in registry_names if name != "reference_borrower"]
     if len({address.lower() for address in contracts}) != len(contracts):
         raise Mumble("contract registry contains duplicate entries")
-    require_code(target, [setup, *contracts])
+    require_code(target, [registry, *contracts])
 
     implementation_values = rpc_batch(target, [
         ("eth_getStorageAt", [topology[name], IMPLEMENTATION_SLOT, "latest"])
-        for name in ("lending", "legacy", "risk", "mirror", "treasury")
+        for name in ("lending", "gauge_v1", "risk", "mirror", "treasury")
     ])
     implementations = [decode_address(value) for value in implementation_values]
-    target._implementations = dict(zip(("lending", "legacy", "risk", "mirror", "treasury"), implementations))
+    target._implementations = dict(zip(("lending", "gauge_v1", "risk", "mirror", "treasury"), implementations))
     ensure_nonzero_addresses(implementations)
     require_code(target, implementations)
 
-    victim_arg = address_word(topology["victim"])
+    borrower_arg = address_word(topology["reference_borrower"])
     specs = (
         ("treasury_owner", topology["treasury"], SELECTOR["owner"]),
         ("treasury_governor", topology["treasury"], SELECTOR["governor"]),
@@ -234,10 +234,10 @@ def contract_integrity(target):
         ("collateral_token", topology["lending"], SELECTOR["collateral_token"]),
         ("debt_token", topology["lending"], SELECTOR["debt_token"]),
         ("oracle", topology["lending"], SELECTOR["oracle"]),
-        ("position", topology["lending"], calldata(SELECTOR["positions"], victim_arg)),
-        ("legacy_staking", topology["legacy"], SELECTOR["staking"]),
-        ("reward_token", topology["legacy"], SELECTOR["reward"]),
-        ("reward_rate", topology["legacy"], SELECTOR["reward_per_token"]),
+        ("position", topology["lending"], calldata(SELECTOR["positions"], borrower_arg)),
+        ("gauge_staking", topology["gauge_v1"], SELECTOR["staking"]),
+        ("reward_token", topology["gauge_v1"], SELECTOR["reward"]),
+        ("reward_rate", topology["gauge_v1"], SELECTOR["reward_per_token"]),
         ("governor_treasury", topology["risk"], SELECTOR["treasury_ref"]),
         ("treasury_token", topology["risk"], SELECTOR["treasury_token"]),
         ("review_threshold", topology["risk"], SELECTOR["review_threshold"]),
@@ -246,14 +246,14 @@ def contract_integrity(target):
         ("voting_period", topology["risk"], SELECTOR["voting_period"]),
         ("mirror_owner", topology["mirror"], SELECTOR["owner"]),
         ("vault", topology["mirror"], SELECTOR["vault"]),
-        ("sync_failures", topology["mirror"], SELECTOR["sync_failures"]),
+        ("sync_attempts_failed", topology["mirror"], SELECTOR["sync_attempts_failed"]),
     )
     replies = rpc_batch(target, [call(address, data) for _, address, data in specs])
     state = dict(zip((name for name, _, _ in specs), replies))
 
     address_keys = (
         "treasury_owner", "treasury_governor", "amm", "rebalance_token", "settlement_token",
-        "lending_owner", "collateral_token", "debt_token", "oracle", "legacy_staking",
+        "lending_owner", "collateral_token", "debt_token", "oracle", "gauge_staking",
         "reward_token", "governor_treasury", "treasury_token", "mirror_owner", "vault",
     )
     addresses = {key: decode_address(state[key]) for key in address_keys}
@@ -276,15 +276,15 @@ def contract_integrity(target):
     secondary_specs = (
         ("vault_token", addresses["vault"], SELECTOR["token"]),
         ("vault_mirror", addresses["vault"], SELECTOR["mirror_ref"]),
-        ("staking_token", addresses["legacy_staking"], SELECTOR["token"]),
-        ("old_gauge", addresses["legacy_staking"], SELECTOR["old_gauge"]),
-        ("migration_target", addresses["legacy_staking"], SELECTOR["migration_target"]),
-        ("migrated", addresses["legacy_staking"], SELECTOR["migrated"]),
+        ("staking_token", addresses["gauge_staking"], SELECTOR["token"]),
+        ("previous_gauge", addresses["gauge_staking"], SELECTOR["previous_gauge"]),
+        ("next_gauge", addresses["gauge_staking"], SELECTOR["next_gauge"]),
+        ("migrated", addresses["gauge_staking"], SELECTOR["migrated"]),
         ("amm_token0", addresses["amm"], SELECTOR["token0"]),
         ("amm_token1", addresses["amm"], SELECTOR["token1"]),
         ("reserve0", addresses["amm"], SELECTOR["reserve0"]),
         ("reserve1", addresses["amm"], SELECTOR["reserve1"]),
-        ("reward_reserve", addresses["reward_token"], calldata(SELECTOR["balance_of"], address_word(topology["legacy"]))),
+        ("reward_reserve", addresses["reward_token"], calldata(SELECTOR["balance_of"], address_word(topology["gauge_v1"]))),
         ("treasury_reserve", addresses["treasury_token"], calldata(SELECTOR["balance_of"], address_word(topology["treasury"]))),
     )
     replies = rpc_batch(target, [call(address, data) for _, address, data in secondary_specs])
@@ -292,12 +292,12 @@ def contract_integrity(target):
 
     secondary_addresses = {
         key: decode_address(secondary[key])
-        for key in ("vault_token", "vault_mirror", "staking_token", "old_gauge", "migration_target", "amm_token0", "amm_token1")
+        for key in ("vault_token", "vault_mirror", "staking_token", "previous_gauge", "next_gauge", "amm_token0", "amm_token1")
     }
     ensure_nonzero_addresses(secondary_addresses.values())
     if secondary_addresses["vault_mirror"].lower() != topology["mirror"].lower():
         raise Mumble("voting topology is inconsistent")
-    if secondary_addresses["old_gauge"].lower() != topology["legacy"].lower():
+    if secondary_addresses["previous_gauge"].lower() != topology["gauge_v1"].lower():
         raise Mumble("staking topology is inconsistent")
     amm_tokens = {secondary_addresses["amm_token0"].lower(), secondary_addresses["amm_token1"].lower()}
     expected_amm_tokens = {addresses["rebalance_token"].lower(), addresses["settlement_token"].lower()}
@@ -311,9 +311,9 @@ def contract_integrity(target):
     require_code(target, [
         addresses["treasury_governor"], addresses["amm"], addresses["rebalance_token"],
         addresses["settlement_token"], addresses["collateral_token"], addresses["debt_token"],
-        addresses["oracle"], addresses["legacy_staking"], addresses["reward_token"],
+        addresses["oracle"], addresses["gauge_staking"], addresses["reward_token"],
         addresses["treasury_token"], addresses["vault"], secondary_addresses["vault_token"],
-        secondary_addresses["staking_token"], secondary_addresses["migration_target"],
+        secondary_addresses["staking_token"], secondary_addresses["next_gauge"],
     ])
 
     target._topology = {**topology, **addresses, **secondary_addresses}
@@ -333,8 +333,8 @@ def contract_behavior(target):
         (topology["treasury"], SELECTOR["reset_rebalance"], topology["treasury_owner"]),
         (topology["lending"], calldata(SELECTOR["seed"], actor_arg, uint_word(1), uint_word(1)), topology["lending_owner"]),
         (topology["mirror"], calldata(SELECTOR["sync"], actor_arg, uint_word(1)), topology["vault"]),
-        (topology["mirror"], SELECTOR["reset_sync"], topology["mirror_owner"]),
-        (topology["legacy"], calldata(SELECTOR["balance_change"], actor_arg, uint_word(0), uint_word(1)), topology["legacy_staking"]),
+        (topology["mirror"], SELECTOR["reset_diagnostics"], topology["mirror_owner"]),
+        (topology["gauge_v1"], calldata(SELECTOR["balance_change"], actor_arg, uint_word(0), uint_word(1)), topology["gauge_staking"]),
     )
 
     unauthorized = rpc_batch_raw(target, [call(address, data, actor) for address, data, _ in operations])
@@ -361,7 +361,7 @@ def contract_behavior(target):
         raise Mumble("public contract operation returned an invalid result")
 
     healthy_liquidation = calldata(
-        SELECTOR["liquidate"], address_word(topology["victim"]), uint_word(1), uint_word(1)
+        SELECTOR["liquidate"], address_word(topology["reference_borrower"]), uint_word(1), uint_word(1)
     )
     reply = rpc_batch_raw(target, [call(topology["lending"], healthy_liquidation, actor)])[0]
     if "error" not in reply:
@@ -381,7 +381,7 @@ def stateful_functionality(target):
     if not implementations:
         raise Mumble("implementations unavailable")
     probes = json.loads(Path(__file__).with_name("probes.json").read_text())
-    for name, contract in (("LendingProbe", "lending"), ("RewardProbe", "legacy"),
+    for name, contract in (("LendingProbe", "lending"), ("RewardProbe", "gauge_v1"),
                            ("VoteProbe", "mirror"), ("TreasuryProbe", "treasury"),
                            ("GovernanceProbe", "risk")):
         data = probes[name] + address_word(implementations[contract]) + uint_word(10 + secrets.randbelow(10))
@@ -396,8 +396,8 @@ def funding(target):
     if not topology:
         raise Mumble("contract topology is unavailable")
 
-    setup = self_info(target)["setupContract"].lower().encode()
-    player = "0x" + hashlib.sha256(setup + b":checker-faucet").hexdigest()[-40:]
+    registry = self_info(target)["registryContract"].lower().encode()
+    player = "0x" + hashlib.sha256(registry + b":checker-faucet").hexdigest()[-40:]
     result = json_response(target.request("POST", "/faucet", json={"player": player}))
     if result.get("player", "").lower() != player.lower():
         raise Mumble("faucet returned the wrong address")

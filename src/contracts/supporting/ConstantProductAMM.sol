@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC20} from "./IERC20.sol";
+import {IERC20} from "../interfaces/IERC20.sol";
 
 contract ConstantProductAMM {
     error ConstantProductAMM__InvalidToken();
@@ -22,28 +22,28 @@ contract ConstantProductAMM {
     address public treasury;
     uint256 public reference0;
     uint256 public reference1;
-    mapping(address => uint256) public treasuryLoss;
+    mapping(address => uint256) public executionVariance;
 
-    function setTreasury(address t) external {
+    function setTreasury(address treasury_) external {
         if (msg.sender != owner) revert ConstantProductAMM__NotOwner();
         if (treasury != address(0)) revert ConstantProductAMM__TreasuryConfigured();
-        treasury = t;
+        treasury = treasury_;
         reference0 = reserve0;
         reference1 = reserve1;
     }
 
-    constructor(address a, address b) {
-        token0 = IERC20(a);
-        token1 = IERC20(b);
+    constructor(address token0_, address token1_) {
+        token0 = IERC20(token0_);
+        token1 = IERC20(token1_);
         owner = msg.sender;
     }
 
-    function addLiquidity(uint256 a, uint256 b) external {
-        token0.transferFrom(msg.sender, address(this), a);
-        token1.transferFrom(msg.sender, address(this), b);
+    function addLiquidity(uint256 amount0, uint256 amount1) external {
+        token0.transferFrom(msg.sender, address(this), amount0);
+        token1.transferFrom(msg.sender, address(this), amount1);
 
-        reserve0 += a;
-        reserve1 += b;
+        reserve0 += amount0;
+        reserve1 += amount1;
     }
 
     function syncReserves() external {
@@ -80,10 +80,12 @@ contract ConstantProductAMM {
         if (out < minOut || out == 0) revert ConstantProductAMM__InsufficientOutput();
         if (msg.sender == treasury && tokenIn == address(token0)) {
             uint256 feeAmount = amountIn * FEE_NUMERATOR;
-            uint256 fairOutput = feeAmount * reference1 / (reference0 * FEE_DENOMINATOR + feeAmount);
+            uint256 baselineOutput = feeAmount * reference1 / (reference0 * FEE_DENOMINATOR + feeAmount);
             reference0 += amountIn;
-            reference1 -= fairOutput;
-            if (out * 100 < fairOutput * 90) treasuryLoss[tx.origin] += fairOutput - out;
+            reference1 -= baselineOutput;
+            if (out * 100 < baselineOutput * 90) {
+                executionVariance[tx.origin] += baselineOutput - out;
+            }
         }
 
         if (tokenIn == address(token0)) {

@@ -102,7 +102,7 @@ function selfInfo() {
   return {
     rpcUrl: "/rpc",
     playerAddress: system.playerAddress,
-    setupContract: system._addresses.setup,
+    registryContract: system._addresses.registry,
   };
 }
 
@@ -147,7 +147,7 @@ const RESERVE_FIELDS = [
   ["Treasury TRES", "treasuryAsset", "treasury"],
   ["Treasury MKT", "marketAsset", "treasury"],
   ["Lending collateral", "collateral", "lending"],
-  ["Legacy gauge reward", "reward", "legacyGauge"],
+  ["Gauge V1 reward", "reward", "rewardGaugeV1"],
   ["AMM market reserve", "marketAsset", "amm"],
   ["AMM settlement reserve", "stable", "amm"],
 ];
@@ -210,13 +210,13 @@ async function callView(to, abiName, fn, args = []) {
   return iface(abiName).decodeFunctionResult(fn, raw);
 }
 
-async function captureEvidence(player) {
+async function readAccountMetrics(player) {
   const a = system._addresses;
   return Promise.all([
-    callView(a.collateral, "Token", "receivedFrom", [a.lending, player]),
-    callView(a.amm, "ConstantProductAMM", "treasuryLoss", [player]),
-    callView(a.reward, "Token", "excessRewards", [player]),
-    callView(a.timelock, "ArenaTimelock", "captures", [player]),
+    callView(a.collateral, "Token", "transferVolume", [a.lending, player]),
+    callView(a.amm, "ConstantProductAMM", "executionVariance", [player]),
+    callView(a.reward, "Token", "rewardAdjustment", [player]),
+    callView(a.timelock, "DaoTimelock", "distributionRecords", [player]),
   ]).then((values) => values.map((value) => BigInt(value[0])));
 }
 
@@ -232,7 +232,7 @@ app.get("/claim-challenge", (req, res, next) => {
     for (const [nonce, claim] of claimNonces) if (claim.expires <= now) claimNonces.delete(nonce);
     if (claimNonces.size >= 1000) return res.status(429).json({ error: "try again later" });
     const nonce = crypto.randomBytes(32).toString("hex");
-    const message = `DAO Treasury flag claim\n${system._addresses.setup}\n${player}\n${nonce}`;
+    const message = `DAO Treasury flag claim\n${system._addresses.registry}\n${player}\n${nonce}`;
     claimNonces.set(nonce, { player, message, expires: now + 60000 });
     res.set("Cache-Control", "no-store").json({ nonce, message });
   } catch (error) { next(error); }
@@ -251,14 +251,14 @@ app.post("/flag", async (req, res, next) => {
     if (claimsInFlight.has(player)) return res.status(429).json({ error: "claim in progress" });
     claimsInFlight.add(player);
     claimNonces.delete(req.body.nonce);
-    const evidence = await captureEvidence(player);
-    const used = (consumedClaims[player] || ["0", "0", "0", "0"]).map(BigInt);
-    const minimum = [ethers.parseEther("100"), ethers.parseEther("10"), ethers.parseEther("100"), 1n];
-    if (!evidence.some((value, i) => value - used[i] >= minimum[i])) {
+    const metrics = await readAccountMetrics(player);
+    const baseline = (consumedClaims[player] || ["0", "0", "0", "0"]).map(BigInt);
+    const minimumDelta = [ethers.parseEther("100"), ethers.parseEther("10"), ethers.parseEther("100"), 1n];
+    if (!metrics.some((value, i) => value - baseline[i] >= minimumDelta[i])) {
       return res.status(403).json({ error: "no capture evidence for this wallet" });
     }
     const flag = currentFlag();
-    const nextClaims = { ...consumedClaims, [player]: evidence.map(String) };
+    const nextClaims = { ...consumedClaims, [player]: metrics.map(String) };
     fs.mkdirSync(path.dirname(CLAIMS_FILE), { recursive: true });
     fs.writeFileSync(`${CLAIMS_FILE}.tmp`, JSON.stringify(nextClaims), { mode: 0o600 });
     fs.renameSync(`${CLAIMS_FILE}.tmp`, CLAIMS_FILE);

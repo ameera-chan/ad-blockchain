@@ -1,5 +1,6 @@
 node_modules
 test
+forge-test-directory
 artifacts.json
 player/**/out
 player/**/cache

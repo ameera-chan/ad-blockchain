@@ -3,7 +3,7 @@ let credentialText = "";
 
 const serviceFields = [
   ["RPC_URL", (data, rpcUrl) => rpcUrl],
-  ["SETUP_CONTRACT_ADDRESS", (data) => data.setupContract],
+  ["PROTOCOL_REGISTRY_ADDRESS", (data) => data.registryContract],
   ["WALLET_ADDRESS", (data) => data.playerAddress],
 ];
 

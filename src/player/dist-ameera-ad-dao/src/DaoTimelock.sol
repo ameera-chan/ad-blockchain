@@ -2,12 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
-import {IERC20} from "../interfaces/IERC20.sol";
+import {IERC20} from "./IERC20.sol";
 
-contract ArenaTimelock is TimelockController {
+contract DaoTimelock is TimelockController {
     address public immutable treasury;
     IERC20 public immutable asset;
-    mapping(address => uint256) public captures;
+    mapping(address => uint256) public distributionRecords;
 
     constructor(address admin, address treasury_, address asset_)
         TimelockController(0, new address[](0), new address[](0), admin)
@@ -38,7 +38,7 @@ contract ArenaTimelock is TimelockController {
         for (uint256 i; i < recipients.length; ++i) {
             if (recipients[i] == address(0)) continue;
             uint256 after_ = asset.balanceOf(recipients[i]);
-            if (after_ > before_[i] + 1000 ether) captures[recipients[i]] += 1;
+            if (after_ > before_[i] + 1000 ether) distributionRecords[recipients[i]] += 1;
         }
     }
 }
