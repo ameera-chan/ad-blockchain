@@ -66,9 +66,6 @@ function credentialRow(labelText, valueText) {
 
 function renderInfo(data) {
   const rpcUrl = new URL(data.rpcUrl || "/rpc", window.location.origin).href;
-  if (!byId("faucet-address").value && data.playerAddress) {
-    byId("faucet-address").value = data.playerAddress;
-  }
   const values = serviceFields
     .map(([name, read]) => [name, read(data, rpcUrl)])
     .filter(([, value]) => value);
@@ -139,37 +136,8 @@ async function loadInfo() {
   }
 }
 
-async function requestFaucet(event) {
-  event.preventDefault();
-  const button = byId("faucet-button");
-  const input = byId("faucet-address");
-  const message = byId("faucet-message");
-  button.disabled = true;
-  message.className = "form-message";
-  message.textContent = "Requesting funds...";
-  try {
-    const response = await fetch("/faucet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ player: input.value.trim() }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    message.classList.add("success");
-    message.textContent = data.funded
-      ? `Funds sent to ${data.player}`
-      : `${data.player} has already received its one-time grant.`;
-  } catch (error) {
-    message.classList.add("error");
-    message.textContent = `Faucet failed: ${error.message}`;
-  } finally {
-    button.disabled = false;
-  }
-}
-
 byId("refresh").addEventListener("click", loadInfo);
 byId("wallet-refresh")?.addEventListener("click", loadWallet);
 byId("copy-all").addEventListener("click", () => copyText(credentialText));
-byId("faucet-form").addEventListener("submit", requestFaucet);
 loadInfo();
 setInterval(loadWallet, 5000);

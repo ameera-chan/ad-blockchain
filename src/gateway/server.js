@@ -24,6 +24,7 @@ const ANVIL_HOST = process.env.ANVIL_HOST || "127.0.0.1";
 const ANVIL_PORT = Number(process.env.ANVIL_PORT || 8545);
 const ANVIL_STATE = process.env.ANVIL_STATE || "/data/anvil-state.json";
 const CLAIMS_FILE = process.env.CLAIMS_FILE || "/data/secrets/claims.json";
+const ROUND_STATE_FILE = process.env.ROUND_STATE_FILE || "/data/secrets/round-state.json";
 const MIN_WALLET_ETH = ethers.parseEther("0.01");
 
 // ----------------------------------------------------------------------------
@@ -87,6 +88,8 @@ let artifacts = null;
 const claimNonces = new Map();
 const claimsInFlight = new Set();
 let consumedClaims = {};
+let roundState = { flagHash: "", funded: {} };
+let roundSyncQueue = Promise.resolve();
 
 function currentFlag() {
   try {
@@ -96,6 +99,32 @@ function currentFlag() {
   const injected = process.env.GZCTF_FLAG?.trim();
   if (!injected) throw new Error("challenge flag not configured");
   return injected;
+}
+
+function flagHash(flag) {
+  return crypto.createHash("sha256").update(flag).digest("hex");
+}
+
+function saveRoundState() {
+  fs.mkdirSync(path.dirname(ROUND_STATE_FILE), { recursive: true });
+  fs.writeFileSync(`${ROUND_STATE_FILE}.tmp`, JSON.stringify(roundState), { mode: 0o600 });
+  fs.renameSync(`${ROUND_STATE_FILE}.tmp`, ROUND_STATE_FILE);
+}
+
+function synchronizeRound() {
+  const task = roundSyncQueue.then(async () => {
+    const flag = currentFlag();
+    const nextHash = flagHash(flag);
+    if (roundState.flagHash !== nextHash) {
+      await system.reset();
+      roundState = { flagHash: nextHash, funded: {} };
+      saveRoundState();
+      console.log("round state refreshed for a new flag");
+    }
+    return flag;
+  });
+  roundSyncQueue = task.catch(() => undefined);
+  return task;
 }
 
 function selfInfo() {
@@ -127,7 +156,12 @@ function writePrivateCredentials() {
 // ----------------------------------------------------------------------------
 
 app.get("/self-info", (_req, res) => res.json(selfInfo()));
-app.get("/health", (_req, res) => res.type("text/plain").send("ok"));
+app.get("/health", async (_req, res, next) => {
+  try {
+    await synchronizeRound();
+    res.type("text/plain").send("ok");
+  } catch (error) { next(error); }
+});
 app.get("/status", async (_req, res, next) => {
   try {
     res.set("Cache-Control", "no-store");
@@ -251,13 +285,13 @@ app.post("/flag", async (req, res, next) => {
     if (claimsInFlight.has(player)) return res.status(429).json({ error: "claim in progress" });
     claimsInFlight.add(player);
     claimNonces.delete(req.body.nonce);
+    const flag = await synchronizeRound();
     const metrics = await readAccountMetrics(player);
     const baseline = (consumedClaims[player] || ["0", "0", "0", "0"]).map(BigInt);
     const minimumDelta = [ethers.parseEther("100"), ethers.parseEther("10"), ethers.parseEther("100"), 1n];
     if (!metrics.some((value, i) => value - baseline[i] >= minimumDelta[i])) {
       return res.status(403).json({ error: "no capture evidence for this wallet" });
     }
-    const flag = currentFlag();
     const nextClaims = { ...consumedClaims, [player]: metrics.map(String) };
     fs.mkdirSync(path.dirname(CLAIMS_FILE), { recursive: true });
     fs.writeFileSync(`${CLAIMS_FILE}.tmp`, JSON.stringify(nextClaims), { mode: 0o600 });
@@ -274,7 +308,14 @@ app.post("/flag", async (req, res, next) => {
 app.post("/faucet", async (req, res, next) => {
   try {
     const player = ethers.getAddress(req.body?.player || "");
+    await synchronizeRound();
+    const key = player.toLowerCase();
+    if (roundState.funded[key] === roundState.flagHash) {
+      return res.json({ funded: false, player });
+    }
     const did = await system.fund(player);
+    roundState.funded[key] = roundState.flagHash;
+    saveRoundState();
     res.json({ funded: did, player });
   } catch (error) { next(error); }
 });
@@ -332,6 +373,13 @@ async function boot() {
   writePrivateCredentials();
   try { consumedClaims = JSON.parse(fs.readFileSync(CLAIMS_FILE, "utf8")); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
+  try {
+    const stored = JSON.parse(fs.readFileSync(ROUND_STATE_FILE, "utf8"));
+    if (typeof stored.flagHash === "string" && stored.funded && typeof stored.funded === "object") {
+      roundState = stored;
+    }
+  } catch (error) { if (error.code !== "ENOENT") throw error; }
+  await synchronizeRound();
   console.log(`[anvil] raw rpc on ${ANVIL_HOST}:${system.port} (organizer-only; gateway on :${PORT})`);
 }
 
@@ -346,6 +394,9 @@ if (require.main === module) {
         catch (error) { console.error("oracle refresh failed:", error.message); }
         finally { refreshing = false; }
       }, 60000).unref();
+      setInterval(() => {
+        synchronizeRound().catch((error) => console.error("round refresh failed:", error.message));
+      }, 5000).unref();
       app.listen(PORT, "0.0.0.0", () => console.log(`dao-defense listening on ${PORT}`));
     })
     .catch((error) => { console.error(error); process.exit(1); });

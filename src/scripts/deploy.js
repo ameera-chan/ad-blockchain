@@ -213,6 +213,14 @@ async function deploySystem(artifacts, opts = {}) {
     else if (current < target) await act(token, "mint", [to, target - current]);
   };
 
+  const topUpBalance = async (token, to, target) => {
+    const data = token.interface.encodeFunctionData("balanceOf", [to]);
+    const current = BigInt(await provider.send("eth_call", [{ to: await token.getAddress(), data }, "latest"]));
+    if (current >= target) return false;
+    await act(token, "mint", [to, target - current]);
+    return true;
+  };
+
   const deployProxy = async (artifact, initArgs = []) => {
     const impl = await deploy(artifact);
     const initData = new ethers.Interface(artifact.abi).encodeFunctionData("initialize", initArgs);
@@ -352,26 +360,24 @@ async function deploySystem(artifacts, opts = {}) {
   const fund = async (address) => {
     address = ethers.getAddress(address);
     if (funding.has(address)) return false;
-    const issued = await Promise.all(["gov", "debt", "lp", "marketAsset"].map(async (name) => {
-      const c = contracts[name];
-      return new ethers.Contract(await c.getAddress(), c.interface, provider).grantIssued(address);
-    }));
-    if (issued.every(Boolean)) return false;
     funding.add(address);
     try {
-      await provider.send("anvil_setBalance", [address, ethers.toQuantity(E("20"))]);
-      await act(contracts.gov, "grant", [address, E("150")]);
-      await act(contracts.debt, "grant", [address, E("80")]);
-      await act(contracts.lp, "grant", [address, E("100")]);
-      await act(contracts.marketAsset, "grant", [address, E("200")]);
-      return true;
+      let changed = false;
+      if (await provider.getBalance(address) < E("20")) {
+        await provider.send("anvil_setBalance", [address, ethers.toQuantity(E("20"))]);
+        changed = true;
+      }
+      changed = await topUpBalance(contracts.gov, address, E("150")) || changed;
+      changed = await topUpBalance(contracts.debt, address, E("80")) || changed;
+      changed = await topUpBalance(contracts.lp, address, E("100")) || changed;
+      changed = await topUpBalance(contracts.marketAsset, address, E("200")) || changed;
+      return changed;
     } finally {
       funding.delete(address);
     }
   };
 
   const provisionPlayer = async () => {
-    await provider.send("anvil_setBalance", [playerWallet.address, ethers.toQuantity(E("20"))]);
     await fund(playerWallet.address);
   };
 
